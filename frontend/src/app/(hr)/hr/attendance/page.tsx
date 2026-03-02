@@ -63,36 +63,41 @@ export default function AttendancePage() {
 
       const data = await res.json();
       if (data.success) {
-        const mapped = (data.data || []).map((r: any) => {
-          const emp = r.employee || {};
-          const checkInTime = r.checkInTime ? new Date(r.checkInTime) : null;
-          const checkOutTime = r.checkOutTime ? new Date(r.checkOutTime) : null;
-          let hours = 0;
-          if (checkInTime && checkOutTime) {
-            hours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-          }
+        const mapped = (data.data || [])
+          .filter((r: any) => {
+            const emp = r.employee || {};
+            return emp.role === 'USER' || !emp.role;
+          })
+          .map((r: any) => {
+            const emp = r.employee || {};
+            const checkInTime = r.checkInTime ? new Date(r.checkInTime) : null;
+            const checkOutTime = r.checkOutTime ? new Date(r.checkOutTime) : null;
+            let hours = 0;
+            if (checkInTime && checkOutTime) {
+              hours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
+            }
 
-          let status = 'Present';
-          if (!checkInTime) {
-            status = 'Absent';
-          } else {
-            const h = checkInTime.getHours();
-            const m = checkInTime.getMinutes();
-            if (h > 8 || (h === 8 && m > 0)) status = 'Late';
-          }
+            let status = 'Present';
+            if (!checkInTime) {
+              status = 'Absent';
+            } else {
+              const h = checkInTime.getHours();
+              const m = checkInTime.getMinutes();
+              if (h > 8 || (h === 8 && m > 0)) status = 'Late';
+            }
 
-          return {
-            id: r.id,
-            employeeId: r.employeeId,
-            employeeName: `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || `Employee #${r.employeeId}`,
-            employeeNumber: emp.employeeNumber || `EMP${String(r.employeeId).padStart(3, '0')}`,
-            date: selectedDate,
-            checkIn: checkInTime ? checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '---',
-            checkOut: checkOutTime ? checkOutTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '---',
-            status,
-            hoursWorked: Math.round(hours * 100) / 100,
-          };
-        });
+            return {
+              id: r.id,
+              employeeId: r.employeeId,
+              employeeName: `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || `Employee #${r.employeeId}`,
+              employeeNumber: emp.employeeNumber || `EMP${String(r.employeeId).padStart(3, '0')}`,
+              date: selectedDate,
+              checkIn: checkInTime ? checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '---',
+              checkOut: checkOutTime ? checkOutTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '---',
+              status,
+              hoursWorked: Math.round(hours * 100) / 100,
+            };
+          });
         setRecords(mapped);
       }
     } catch (error) {

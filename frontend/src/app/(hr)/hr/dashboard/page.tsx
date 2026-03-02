@@ -36,6 +36,7 @@ export default function HRDashboard() {
   const [recentLogs, setRecentLogs] = useState<AttendanceRecord[]>([]);
   const [userName, setUserName] = useState('HR User');
   const [userRole, setUserRole] = useState('HR');
+  const [userDepartment, setUserDepartment] = useState('Human Resources');
 
   useEffect(() => {
     // Load user info from localStorage
@@ -45,6 +46,7 @@ export default function HRDashboard() {
         const parsed = JSON.parse(employee);
         setUserName(`${parsed.firstName || ''} ${parsed.lastName || ''}`.trim() || 'HR User');
         setUserRole(parsed.role === 'HR' ? 'HR Payroll Officer' : parsed.role);
+        setUserDepartment(parsed.Department?.name || parsed.department || 'Human Resources');
       }
     } catch { /* fallback defaults */ }
 
@@ -201,7 +203,7 @@ export default function HRDashboard() {
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Department</p>
               <p className="text-sm font-bold text-slate-700 flex items-center gap-1 uppercase tracking-tight">
-                <Activity size={14} className="text-red-400" /> {userRole}
+                <Activity size={14} className="text-red-400" /> {userDepartment}
               </p>
             </div>
             <div>

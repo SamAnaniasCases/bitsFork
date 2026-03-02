@@ -91,15 +91,15 @@ export default function LoginPage() {
     }
   }
 
-  const handleDemoLogin = async () => {
-    // Remove demo login or update it to use real credentials
-    setEmail('admin@bits.com')
-    setPassword('admin123')
+  // const handleDemoLogin = async () => {
+  //   // Remove demo login or update it to use real credentials
+  //   setEmail('admin@bits.com')
+  //   setPassword('admin123')
 
-    // Trigger form submission
-    const event = { preventDefault: () => { } } as React.FormEvent
-    await handleSubmit(event)
-  }
+  //   // Trigger form submission
+  //   const event = { preventDefault: () => { } } as React.FormEvent
+  //   await handleSubmit(event)
+  // }
 
   return (
     <div className="relative min-h-screen w-full overflow-y-auto">

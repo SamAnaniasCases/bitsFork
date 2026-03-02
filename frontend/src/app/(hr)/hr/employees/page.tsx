@@ -8,7 +8,9 @@ interface Employee {
   firstName: string;
   lastName: string;
   email: string | null;
+  role: string;
   department: string | null;
+  Department?: { name: string } | null;
   branch: string | null;
   position: string | null;
   employmentStatus: 'ACTIVE' | 'INACTIVE' | 'TERMINATED';
@@ -44,7 +46,8 @@ export default function EmployeesPage() {
 
       const data = await res.json();
       if (data.success) {
-        setEmployees(data.employees || data.data || []);
+        const empList = data.employees || data.data || [];
+        setEmployees(empList.filter((e: Employee) => e.role === 'USER'));
       }
     } catch (error) {
       console.error('Error fetching employees:', error);
@@ -54,14 +57,15 @@ export default function EmployeesPage() {
   };
 
   // Derive unique departments and branches from data
-  const departments = ["All Departments", ...Array.from(new Set(employees.map(e => e.department).filter(Boolean))) as string[]];
+  const departments = ["All Departments", ...Array.from(new Set(employees.map(e => e.Department?.name || e.department).filter(Boolean))) as string[]];
   const branches = ["All Branches", ...Array.from(new Set(employees.map(e => e.branch).filter(Boolean))) as string[]];
 
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch = `${emp.firstName} ${emp.lastName} ${emp.employeeNumber || ''}`.toLowerCase().includes(searchQuery.toLowerCase());
     const empStatus = emp.employmentStatus === 'ACTIVE' ? 'Active' : 'Inactive';
     const matchesStatus = empStatus === statusFilter;
-    const matchesDept = deptFilter === "All Departments" || emp.department === deptFilter;
+    const empDept = emp.Department?.name || emp.department;
+    const matchesDept = deptFilter === "All Departments" || empDept === deptFilter;
     const matchesBranch = branchFilter === "All Branches" || emp.branch === branchFilter;
     return matchesSearch && matchesStatus && matchesDept && matchesBranch;
   });
@@ -97,8 +101,8 @@ export default function EmployeesPage() {
               key={status}
               onClick={() => setStatusFilter(status)}
               className={`relative h-full text-[11px] font-black uppercase tracking-widest transition-all ${statusFilter === status
-                  ? 'text-slate-800'
-                  : 'text-slate-400 hover:text-slate-600'
+                ? 'text-slate-800'
+                : 'text-slate-400 hover:text-slate-600'
                 }`}
             >
               <div className="flex items-center gap-2">
@@ -169,7 +173,7 @@ export default function EmployeesPage() {
                     <p className="text-xs text-slate-400">{emp.email || '—'}</p>
                   </td>
                   <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">{emp.department || '—'}</span>
+                    <span className="text-xs font-medium text-slate-500">{emp.Department?.name || emp.department || '—'}</span>
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-xs font-medium text-slate-500">{emp.branch || '—'}</span>

@@ -3,3 +3,8 @@ export const BRANCHES = [
   'TAYUD',
   'MAKATI',
 ] as const
+
+export type Branch = {
+  id: number
+  name: string
+}

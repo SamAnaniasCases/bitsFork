@@ -54,11 +54,13 @@ export default function ReportsPage() {
       const empData = await empRes.json();
       const attData = await attRes.json();
 
-      const employees = empData.success ? (empData.employees || empData.data || []) : [];
+      const allEmployees = empData.success ? (empData.employees || empData.data || []) : [];
+      // Only include standard employees (exclude ADMIN and HR)
+      const employees = allEmployees.filter((e: any) => e.role === 'USER' || !e.role);
       const attendance = attData.success ? (attData.data || []) : [];
 
       // Extract unique departments
-      const depts = Array.from(new Set(employees.map((e: any) => e.department).filter(Boolean))) as string[];
+      const depts = Array.from(new Set(employees.map((e: any) => e.Department?.name || e.department).filter(Boolean))) as string[];
       setDepartments(depts);
 
       // Group attendance by employee
@@ -67,7 +69,7 @@ export default function ReportsPage() {
       employees.forEach((emp: any) => {
         empMap.set(emp.id, {
           name: `${emp.firstName} ${emp.lastName}`,
-          dept: emp.department || '',
+          dept: emp.Department?.name || emp.department || '',
           present: 0,
           late: 0,
           hours: 0,
@@ -121,7 +123,8 @@ export default function ReportsPage() {
       if (deptFilter !== 'All Departments') {
         const filtered = result.filter(r => {
           const emp = employees.find((e: any) => e.id === r.id);
-          return emp?.department === deptFilter;
+          const empDept = emp?.Department?.name || emp?.department;
+          return empDept === deptFilter;
         });
         setReports(filtered);
       } else {
