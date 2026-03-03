@@ -49,7 +49,7 @@ services:
     container_name: bits_frontend
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001/api
+      BACKEND_URL: http://backend:3001
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
       # volumes:
