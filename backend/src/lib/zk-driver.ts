@@ -48,9 +48,6 @@ export class ZKDriver {
         // dynamic require to match previous working code's behavior
         const ZKLib = require('node-zklib');
         this.zkInstance = new ZKLib(this.ip, this.port, this.timeout, this.timeout);
-
-        console.log(`[ZKDriver] Initialized ZKLib. Instance has setUser? ${typeof this.zkInstance.setUser}`);
-
         await this.zkInstance.createSocket();
     }
 
@@ -59,8 +56,13 @@ export class ZKDriver {
      */
     async disconnect(): Promise<void> {
         if (this.zkInstance) {
-            await this.zkInstance.disconnect();
-            this.zkInstance = null;
+            try {
+                await this.zkInstance.disconnect();
+            } catch {
+                // Silently ignore — socket was never connected (e.g. device unreachable)
+            } finally {
+                this.zkInstance = null;
+            }
         }
     }
 

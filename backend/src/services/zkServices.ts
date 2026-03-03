@@ -117,10 +117,11 @@ export const syncZkData = async (): Promise<SyncResult> => {
         return { success: true, newLogs: newCount };
 
     } catch (error: any) {
-        console.error('[ZK] Error:', error);
+        const reason = error?.err?.message || error?.message || String(error);
+        console.error(`[ZK] Sync failed — device unreachable at ${process.env.ZK_HOST || '192.168.1.201'}:${process.env.ZK_PORT || '4370'} (${reason})`);
         return {
             success: false,
-            error: `Sync Error: ${error.message || error}`,
+            error: reason,
             message: 'Failed to sync attendance data'
         };
     } finally {

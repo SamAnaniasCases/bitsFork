@@ -10,7 +10,7 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
   const [time, setTime] = useState(new Date());
   const [mounted, setMounted] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isDeviceOnline, setIsDeviceOnline] = useState(true); 
+  const [isDeviceOnline, setIsDeviceOnline] = useState<boolean | null>(null); // null = checking
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [userName, setUserName] = useState('');
 
@@ -26,8 +26,26 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
       setUserName('HR');
     }
     const timer = setInterval(() => setTime(new Date()), 1000);
+
+    // Poll ZK device status every 30 seconds
+    const checkDevice = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch('/api/zk/status', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        const data = await res.json();
+        setIsDeviceOnline(data.online === true);
+      } catch {
+        setIsDeviceOnline(false);
+      }
+    };
+    checkDevice();
+    const deviceTimer = setInterval(checkDevice, 30000);
+
     return () => {
       clearInterval(timer);
+      clearInterval(deviceTimer);
     };
   }, []);
 
@@ -55,7 +73,7 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
           <Menu size={24} />
         </button>
         <div className="flex items-center gap-3">
-          
+
           <div className="relative h-11 w-11 overflow-hidden rounded-xl border border-red-700 bg-[#FE0908]">
             <Image src="/images/av.jpg" alt="Logo" fill className="object-contain" priority quality={100} />
           </div>
@@ -64,21 +82,23 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
       </div>
 
       <div className="flex items-center gap-3 md:gap-6">
-        <button 
-          onClick={() => setIsDeviceOnline(!isDeviceOnline)}
-          className={`hidden md:flex items-center gap-3 px-3 py-1.5 border rounded-full transition-all duration-300 ${
-            isDeviceOnline 
-            ? 'bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-100' 
-            : 'bg-rose-50 border-rose-100 text-rose-700 hover:bg-rose-100'
-          }`}
+        <button
+          className={`hidden md:flex items-center gap-3 px-3 py-1.5 border rounded-full transition-all duration-300 ${isDeviceOnline === null
+              ? 'bg-slate-50 border-slate-200 text-slate-500'
+              : isDeviceOnline
+                ? 'bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-100'
+                : 'bg-rose-50 border-rose-100 text-rose-700 hover:bg-rose-100'
+            }`}
         >
           <div className="relative flex h-2 w-2">
-            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isDeviceOnline ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
-            <span className={`relative inline-flex rounded-full h-2 w-2 ${isDeviceOnline ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isDeviceOnline === null ? 'bg-slate-400' : isDeviceOnline ? 'bg-emerald-400' : 'bg-rose-400'
+              }`}></span>
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${isDeviceOnline === null ? 'bg-slate-400' : isDeviceOnline ? 'bg-emerald-500' : 'bg-rose-500'
+              }`}></span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-black uppercase tracking-tighter">
-              {isDeviceOnline ? 'ZK-Device Online' : 'ZK-Device Offline'}
+              {isDeviceOnline === null ? 'ZK-Device Checking...' : isDeviceOnline ? 'ZK-Device Online' : 'ZK-Device Offline'}
             </span>
           </div>
         </button>

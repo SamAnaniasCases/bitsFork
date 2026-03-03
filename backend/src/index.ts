@@ -11,6 +11,7 @@ import employeeRoutes from './routes/employee_routes';
 import userRoutes from './routes/user_routes';
 import departmentRoutes from './routes/department_routes';
 import branchRoutes from './routes/branch_routes';
+import zkRoutes from './routes/zk_routes';
 import { startCronJobs } from './lib/cronJobs';
 import { repairMissingCheckouts } from './services/attendance.service';
 
@@ -34,6 +35,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/branches', branchRoutes);
+app.use('/api/zk', zkRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
