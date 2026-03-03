@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: root
     ports:
-      - "5432:5432"
+      - "5010:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -36,7 +36,7 @@ services:
       - /app/dist
     command: npm run dev:watch
     ports:
-      - "3001:3001"
+      - "4010:3001"
     depends_on:
       - postgres
     networks:
@@ -58,7 +58,7 @@ services:
       - /app/.next
     command: npm run dev -- --webpack
     ports:
-      - "3000:3000"
+      - "3010:3000"
     depends_on:
       - backend
     networks:
