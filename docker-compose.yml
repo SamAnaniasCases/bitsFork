@@ -96,6 +96,9 @@ services:
 
 volumes:
   postgres_data:
+    external: true
+    name: project_postgres_data
+
 
 networks:
   bits_network:
