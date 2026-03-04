@@ -1,3 +1,9 @@
+# ─────────────────────────────────────────────────────────────────────
+# DOCKER USERS: Create a .env file in this directory (next to this file)
+# by copying .env.example and filling in your own values.
+# Run: cp backend/.env.example .env  (then edit .env)
+# The variables defined there will be substituted below via ${VAR} syntax.
+# ─────────────────────────────────────────────────────────────────────
 version: '3.8'
 
 services:
@@ -5,9 +11,9 @@ services:
     image: postgres:15-alpine
     container_name: bits_postgres
     environment:
-      POSTGRES_DB: db_bits
-      POSTGRES_USER: root
-      POSTGRES_PASSWORD: root
+      POSTGRES_DB: ${DB_NAME:-db_bits}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
       - "5010:5432"
     volumes:
@@ -21,17 +27,18 @@ services:
       dockerfile: Dockerfile
     container_name: bits_backend
     environment:
-      NODE_ENV: development
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
-      DATABASE_URL: postgresql://root:root@postgres:5432/db_bits
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-db_bits}
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: db_bits
-      DB_USER: root
-      DB_PASSWORD: root
-      JWT_SECRET: your-secret-key-change-this-in-production
-      ZK_HOST: 10.10.0.201
-      ZK_PORT: 4370
+      DB_NAME: ${DB_NAME:-db_bits}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ZK_HOST: ${ZK_HOST:-10.10.0.201}
+      ZK_PORT: ${ZK_PORT:-4370}
       # volumes:
       # - ./backend:/app
       # - /app/node_modules
@@ -50,7 +57,7 @@ services:
       dockerfile: Dockerfile
     container_name: bits_frontend
     environment:
-      NODE_ENV: development
+      NODE_ENV: ${NODE_ENV:-production}
       BACKEND_URL: http://backend:3001
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
