@@ -1,10 +1,23 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/token.utils';
 
-const JWT_SECRET = process.env.JWT_SECRET as string;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** 7 days in milliseconds */
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Cookie options shared by both auth cookies */
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+};
+
+// ── Controllers ───────────────────────────────────────────────────────────────
 
 export const register = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -80,9 +93,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        const employee = await prisma.employee.findFirst({
-            where: { email }
-        });
+        const employee = await prisma.employee.findFirst({ where: { email } });
 
         if (!employee || !employee.password) {
             res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -90,11 +101,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         }
 
         const isPasswordValid = await bcrypt.compare(password, employee.password);
-
         if (!isPasswordValid) {
             res.status(401).json({ success: false, message: 'Invalid credentials' });
             return;
         }
+
         // Role-based access control: Only ADMIN and HR can access the web app
         if (employee.role !== 'ADMIN' && employee.role !== 'HR') {
             res.status(403).json({
@@ -104,24 +115,59 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        // Generate tokens using utility functions
         const tokenPayload = {
             employeeId: employee.id,
             role: employee.role,
             firstName: employee.firstName,
             lastName: employee.lastName,
-            name: `${employee.firstName} ${employee.lastName}` // Maintain backward compatibility in token if possible, or just send fields
+            name: `${employee.firstName} ${employee.lastName}`
         };
 
+        // Generate tokens
         const accessToken = generateAccessToken(tokenPayload);
-        const refreshToken = generateRefreshToken(tokenPayload);
+        const refreshTokenValue = generateRefreshToken(tokenPayload);
+
+        // ── Store refresh token in DB ──────────────────────────────────────────
+        const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+
+        // Delete any previous refresh tokens for this user (old sessions)
+        // and globally expired tokens to keep the table clean
+        await prisma.refreshToken.deleteMany({
+            where: {
+                OR: [
+                    { employeeId: employee.id },          // all previous sessions for this user
+                    { expiresAt: { lt: new Date() } },    // any expired tokens from any user
+                ]
+            }
+        });
+
+        await prisma.refreshToken.create({
+            data: {
+                token: refreshTokenValue,
+                employeeId: employee.id,
+                expiresAt,
+            }
+        });
+
+
+        // ── Set HttpOnly cookies ───────────────────────────────────────────────
+        res.cookie('auth_token', accessToken, {
+            ...cookieOptions,
+            maxAge: 60 * 60 * 1000, // 1 hour
+        });
+        res.cookie('refresh_token', refreshTokenValue, {
+            ...cookieOptions,
+            maxAge: REFRESH_TOKEN_TTL_MS, // 7 days
+        });
 
         res.status(200).json({
             success: true,
             message: 'Login successful',
+            // These tokens are included so the Next.js route handler can relay
+            // them as HttpOnly cookies. The handler strips them from the
+            // browser-facing JSON response, so they never reach client-side JS.
             accessToken,
-            token: accessToken, // Alias for frontend compatibility
-            refreshToken,
+            refreshToken: refreshTokenValue,
             employee: {
                 id: employee.id,
                 firstName: employee.firstName,
@@ -131,6 +177,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             }
         });
 
+
     } catch (error: any) {
         console.error('Login failed:', error);
         res.status(500).json({ success: false, message: 'Login failed', error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error' });
@@ -138,63 +185,111 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 };
 
 /**
- * Refresh Token Controller
- * Generates new access token using valid refresh token
+ * Refresh Token Controller — Token Rotation
+ * Validates refresh token against DB, issues new access + refresh tokens,
+ * deletes old refresh token (rotation = one-time use).
  */
 export const refreshToken = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { refreshToken } = req.body;
+        // Accept refresh token from cookie (preferred) or body (fallback)
+        const incomingToken = req.cookies?.refresh_token || req.body?.refreshToken;
 
-        if (!refreshToken) {
-            res.status(400).json({
-                success: false,
-                message: 'Refresh token is required'
-            });
+        if (!incomingToken) {
+            res.status(401).json({ success: false, message: 'No refresh token provided.', error: 'no_refresh_token' });
             return;
         }
 
-        // Verify refresh token
-        const decoded = verifyRefreshToken(refreshToken);
-
-        // Generate new access token
-        const newAccessToken = generateAccessToken({
-            employeeId: decoded.employeeId,
-            role: decoded.role,
-            firstName: decoded.firstName,
-            lastName: decoded.lastName,
-            name: decoded.name
+        // 1. Look up the token in DB — must exist and not be expired
+        const storedToken = await prisma.refreshToken.findUnique({
+            where: { token: incomingToken },
+            include: { employee: true }
         });
 
-        res.status(200).json({
-            success: true,
-            message: 'Token refreshed successfully',
-            accessToken: newAccessToken
+        if (!storedToken) {
+            // Token not in DB — either already used (rotation) or forged
+            res.clearCookie('auth_token', cookieOptions);
+            res.clearCookie('refresh_token', cookieOptions);
+            res.status(401).json({ success: false, message: 'Invalid refresh token.', error: 'invalid_refresh_token' });
+            return;
+        }
+
+        if (storedToken.expiresAt < new Date()) {
+            // Expired — clean up and force re-login
+            await prisma.refreshToken.delete({ where: { id: storedToken.id } });
+            res.clearCookie('auth_token', cookieOptions);
+            res.clearCookie('refresh_token', cookieOptions);
+            res.status(401).json({ success: false, message: 'Refresh token has expired. Please login again.', error: 'refresh_token_expired' });
+            return;
+        }
+
+        // 2. Verify JWT signature (extra security layer)
+        try {
+            verifyRefreshToken(incomingToken);
+        } catch {
+            await prisma.refreshToken.delete({ where: { id: storedToken.id } });
+            res.clearCookie('auth_token', cookieOptions);
+            res.clearCookie('refresh_token', cookieOptions);
+            res.status(401).json({ success: false, message: 'Invalid refresh token.', error: 'invalid_refresh_token' });
+            return;
+        }
+
+        const employee = storedToken.employee;
+
+        const tokenPayload = {
+            employeeId: employee.id,
+            role: employee.role,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            name: `${employee.firstName} ${employee.lastName}`
+        };
+
+        // 3. Rotate — delete old token, issue new pair
+        const newAccessToken = generateAccessToken(tokenPayload);
+        const newRefreshTokenValue = generateRefreshToken(tokenPayload);
+        const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+
+        await prisma.refreshToken.delete({ where: { id: storedToken.id } });
+        await prisma.refreshToken.create({
+            data: { token: newRefreshTokenValue, employeeId: employee.id, expiresAt }
         });
+
+        // 4. Set new cookies
+        res.cookie('auth_token', newAccessToken, { ...cookieOptions, maxAge: 60 * 60 * 1000 });
+        res.cookie('refresh_token', newRefreshTokenValue, { ...cookieOptions, maxAge: REFRESH_TOKEN_TTL_MS });
+
+        res.status(200).json({ success: true, message: 'Token refreshed successfully' });
 
     } catch (error: any) {
-        if (error.name === 'TokenExpiredError') {
-            res.status(401).json({
-                success: false,
-                message: 'Refresh token has expired. Please login again.',
-                error: 'refresh_token_expired'
-            });
-            return;
-        }
-
-        if (error.name === 'JsonWebTokenError') {
-            res.status(401).json({
-                success: false,
-                message: 'Invalid refresh token.',
-                error: 'invalid_refresh_token'
-            });
-            return;
-        }
-
         console.error('Token refresh failed:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Token refresh failed',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-        });
+        res.status(500).json({ success: false, message: 'Token refresh failed', error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error' });
+    }
+};
+
+/**
+ * Logout Controller
+ * Deletes the refresh token from DB and clears both auth cookies.
+ */
+export const logout = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const refreshTokenValue = req.cookies?.refresh_token;
+
+        if (refreshTokenValue) {
+            // Delete from DB — token is now truly dead, cannot be reused
+            await prisma.refreshToken.deleteMany({
+                where: { token: refreshTokenValue }
+            });
+        }
+
+        res.clearCookie('auth_token', cookieOptions);
+        res.clearCookie('refresh_token', cookieOptions);
+
+        res.status(200).json({ success: true, message: 'Logged out successfully' });
+
+    } catch (error: any) {
+        console.error('Logout failed:', error);
+        // Still clear cookies even if DB operation fails
+        res.clearCookie('auth_token', cookieOptions);
+        res.clearCookie('refresh_token', cookieOptions);
+        res.status(200).json({ success: true, message: 'Logged out successfully' });
     }
 };

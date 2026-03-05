@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, refreshToken } from '../controllers/auth.controller';
+import { register, login, refreshToken, logout } from '../controllers/auth.controller';
 import { validate } from '../middleware/validation.middleware';
 import { registerValidator, loginValidator, refreshValidator } from '../validators/auth.validator';
 import { authenticate } from '../middleware/auth.middleware';
@@ -128,6 +128,20 @@ router.post('/login', validate(loginValidator), login);
  *       401:
  *         description: Invalid refresh token
  */
-router.post('/refresh', validate(refreshValidator), refreshToken);
+router.post('/refresh', refreshToken);
+
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Logout - clears auth cookies and invalidates refresh token in DB
+ *     tags: [Auth]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ */
+router.post('/logout', logout);
 
 export default router;

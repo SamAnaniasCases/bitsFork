@@ -91,15 +91,16 @@ model Employee {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime
 
-  // Relations (Unused for now)
-  departmentId  Int?
-  branchId      Int?
-  shiftId       Int?
-  Attendance    Attendance[]
-  AttendanceLog AttendanceLog[]
-  Department    Department?     @relation(fields: [departmentId], references: [id])
-  Branch        Branch?         @relation(fields: [branchId], references: [id])
-  Shift         Shift?          @relation(fields: [shiftId], references: [id])
+  // Relations
+  departmentId   Int?
+  branchId       Int?
+  shiftId        Int?
+  Attendance     Attendance[]
+  AttendanceLog  AttendanceLog[]
+  RefreshToken   RefreshToken[]
+  Department     Department?     @relation(fields: [departmentId], references: [id])
+  Branch         Branch?         @relation(fields: [branchId], references: [id])
+  Shift          Shift?          @relation(fields: [shiftId], references: [id])
 
   @@index([departmentId])
   @@index([branchId])
@@ -119,7 +120,21 @@ model Shift {
   Employee  Employee[]
 }
 
+model RefreshToken {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  employeeId Int
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
 enum EmploymentStatus {
+
   ACTIVE
   INACTIVE
   TERMINATED

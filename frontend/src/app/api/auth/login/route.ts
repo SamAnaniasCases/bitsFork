@@ -26,25 +26,39 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(data, { status: res.status })
         }
 
-        // ── Set HttpOnly cookie (JS can never read this) ──────────────────────
-        // The token lives in the cookie; we strip it from the JSON body so it
-        // never touches localStorage or any client-side JavaScript variable.
-        const { accessToken, token, refreshToken, ...safeData } = data
+        // ── Set HttpOnly cookies (JS can never read these) ────────────────────
+        // Strip all token fields from the JSON body so they never touch
+        // localStorage or any client-side JavaScript variable.
+        const { accessToken, token, refreshToken: refreshTokenValue, ...safeData } = data
 
         const response = NextResponse.json(
             { ...safeData, success: true },
             { status: 200 }
         )
 
-        response.cookies.set('auth_token', accessToken ?? token, {
+        const cookieBase = {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
+            sameSite: 'lax' as const,
             path: '/',
-            maxAge: 60 * 60 * 8,  // 8 hours
+        }
+
+        // Access token — short lived (1 hour)
+        response.cookies.set('auth_token', accessToken ?? token, {
+            ...cookieBase,
+            maxAge: 60 * 60,
         })
 
+        // Refresh token — long lived (7 days), used to silently renew access token
+        if (refreshTokenValue) {
+            response.cookies.set('refresh_token', refreshTokenValue, {
+                ...cookieBase,
+                maxAge: 7 * 24 * 60 * 60,
+            })
+        }
+
         return response
+
     } catch (error) {
         return NextResponse.json(
             { message: 'Network error. Could not reach the server.' },
