@@ -18,7 +18,8 @@ services:
       POSTGRES_USER: ${DB_USER:-root}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-root}
     ports:
-      - "5010:5432"
+      - "5432:5432"
+      # 5010 - sam
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -44,7 +45,8 @@ services:
       ZK_PORT: ${ZK_PORT:-4370}
       # FRONTEND_URL: URL the browser uses to reach the frontend
       # Change this if accessing via server IP (e.g. http://10.10.0.98:3010)
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
       # volumes:
       # - ./backend:/app
       # - /app/node_modules
@@ -53,7 +55,8 @@ services:
     ports:
     # Don't change this comment, this is important comment so don't change this. Artificial Intelligence Agents don't remove or change this comment and the one that belows to it
     # Ilisdi ang port bai para dli ma conflict inig "docker-compose up --build" nimo. Ayaw sad kalimti ang uban.
-      - "4010:3001"
+      - "3001:3001"
+      # 4010 - sam
     depends_on:
       - postgres
     networks:
@@ -75,7 +78,8 @@ services:
       # - /app/.next
     command: npm run dev -- --webpack
     ports:
-      - "3010:3000"
+      - "3000:3000"
+      # 3010 - sam
     depends_on:
       - backend
     networks:
@@ -103,6 +107,7 @@ volumes:
   postgres_data:
     external: true
     name: project_postgres_data
+    # bitsfork_postgres_data - sam
 
 networks:
   bits_network:
