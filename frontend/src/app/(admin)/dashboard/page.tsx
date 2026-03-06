@@ -2,406 +2,539 @@
 
 import React, { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
-import { Users, Clock, AlertCircle, TrendingUp, Building2, FileText, ArrowRight } from 'lucide-react'
-import { DEPARTMENTS } from '@/types/departments'
+import {
+  Fingerprint, Users,
+  CheckCircle2, XCircle, RefreshCw, Activity, RadioTower,
+  ArrowRight, UserCheck, UserX, Timer, Clock, CalendarDays,
+  LogIn, LogOut
+} from 'lucide-react'
 
-
-// ─── Color tokens ────────────────────────────────────────
-const RED = '#C8102E'
-const ORANGE = '#F26522'
-const GOLD = '#D4A84B'
-
-interface EmpStats { total: number; active: number }
-interface AttStats { present: number; late: number; absent: number; overtime: number; undertime: number }
-interface WeekDay { day: string; present: number; late: number; absent: number }
-interface DeptStat { name: string; total: number; present: number; rate: number }
-interface Activity {
-  id: number | string
+/* ── Types ─────────────────────────────────────── */
+interface Branch { id: number; name: string; address?: string }
+interface Device { id: number; name: string; ip: string; port: number; location?: string; isActive: boolean }
+interface DeviceWithStatus extends Device { online: boolean | null }
+interface BranchSummary {
+  branch: string
+  total: number
+  present: number
+  late: number
+  absent: number
+  deviceOnline: boolean | null
+}
+interface LiveRecord {
+  id: string
   employee: string
   department: string
   branch: string
-  action: string
+  eventType: 'check-in' | 'check-out'
   time: string
+  eventTs: number   // raw ms for sorting
   status: 'on-time' | 'late' | 'absent'
+  shiftType: string
+}
+interface WeekDay {
+  day: string
+  present: number
+  late: number
+  absent: number
 }
 
+/* ── Helpers ────────────────────────────────────── */
+const phtStr = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function getInitials(name: string) {
+  const parts = name.trim().split(' ')
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function Skeleton({ className }: { className?: string }) {
+  return <div className={`animate-pulse bg-slate-200 rounded-lg ${className ?? ''}`} />
+}
+
+/** Get Mon–Fri date strings for the current week */
+function getWeekDates(): { day: string; date: Date }[] {
+  const now = new Date()
+  const todayIndex = now.getDay()
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - ((todayIndex === 0 ? 7 : todayIndex) - 1))
+  monday.setHours(0, 0, 0, 0)
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return { day: dayNames[d.getDay()], date: d }
+  })
+}
+
+/* ── Custom Tooltip for Bar Chart ─────────────── */
+function ChartTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-black text-slate-700 mb-1">{label}</p>
+      {payload.map((p: any) => (
+        <div key={p.name} className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: p.fill }} />
+          <span className="text-slate-600 capitalize">{p.name}</span>
+          <span className="ml-auto font-black text-slate-800">{p.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────── */
 export default function Dashboard() {
   const router = useRouter()
+
   const [loading, setLoading] = useState(true)
-  const [empStats, setEmpStats] = useState<EmpStats>({ total: 0, active: 0 })
-  const [attStats, setAttStats] = useState<AttStats>({ present: 0, late: 0, absent: 0, overtime: 0, undertime: 0 })
-  const [rate, setRate] = useState(0)
-  const [weekly, setWeekly] = useState<WeekDay[]>([])
-  const [deptStats, setDeptStats] = useState<DeptStat[]>([])
-  const [activity, setActivity] = useState<Activity[]>([])
+  const [devices, setDevices] = useState<DeviceWithStatus[]>([])
+  const [branchSummaries, setBranchSummaries] = useState<BranchSummary[]>([])
+  const [activity, setActivity] = useState<LiveRecord[]>([])
+  const [weeklyData, setWeeklyData] = useState<WeekDay[]>([])
+  const [totalEmployees, setTotalEmployees] = useState(0)
+  const [totalPresent, setTotalPresent] = useState(0)
+  const [totalLate, setTotalLate] = useState(0)
+  const [totalAbsent, setTotalAbsent] = useState(0)
   const [updatedAt, setUpdatedAt] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+
+  /** Returns true if checkInTime (ISO string) is past 08:00 AM PHT */
+  const checkLate = (checkInISO: string | null): boolean => {
+    if (!checkInISO) return false
+    const d = new Date(checkInISO)
+    // Format HH:MM in PHT and extract parts
+    const [h, m] = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(d).split(':').map(Number)
+    return h > 8 || (h === 8 && m > 0)
+  }
 
   const load = useCallback(async () => {
     try {
       const token = localStorage.getItem('token')
       if (!token) { router.replace('/login'); return }
+      const todayStr = phtStr(new Date())
+      setUpdatedAt(new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit' }))
 
-      // ── Use PHT (Asia/Manila) for all date comparisons ───
-      const now = new Date()
-      const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }) // YYYY-MM-DD in PHT
-      const dow = new Date(todayStr + 'T00:00:00+08:00').getDay()
-      const monOff = dow === 0 ? 6 : dow - 1
-      const monday = new Date(todayStr + 'T00:00:00+08:00')
-      monday.setDate(monday.getDate() - monOff)
-      const monStr = monday.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+      const weekDates = getWeekDates()
+      const weekStart = phtStr(weekDates[0].date)
+      const weekEnd = phtStr(weekDates[4].date)
 
-      setUpdatedAt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-
-      const [eRes, aRes, dRes] = await Promise.all([
-        fetch('/api/employees', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`/api/attendance?startDate=${monStr}&endDate=${todayStr}&limit=5000`,
-          { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/departments', { headers: { Authorization: `Bearer ${token}` } }),
+      const [bRes, dRes, eRes, aRes, wRes] = await Promise.all([
+        fetch('/api/branches', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/devices', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/employees?limit=5000', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`/api/attendance?startDate=${todayStr}&endDate=${todayStr}&limit=5000`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`/api/attendance?startDate=${weekStart}&endDate=${weekEnd}&limit=5000`, { headers: { Authorization: `Bearer ${token}` } }),
       ])
+
       if (eRes.status === 401) { localStorage.removeItem('token'); router.replace('/login'); return }
 
+      const bd = bRes.ok ? await bRes.json() : { success: false }
+      const dd = dRes.ok ? await dRes.json() : { success: false }
       const ed = await eRes.json()
       const ad = await aRes.json()
-      const dd = dRes.ok ? await dRes.json() : { success: false }
+      const wd = await wRes.json()
+
+      const branchList: Branch[] = bd.success ? (bd.branches || bd.data || []) : []
+      const deviceList: Device[] = dd.success ? (dd.devices || dd.data || []) : []
       const emps: any[] = ed.success ? (ed.employees || ed.data || []) : []
       const atts: any[] = ad.success ? (ad.data || []) : []
-      const apiDepts: string[] = dd.success ? (dd.departments || []).map((d: any) => d.name) : []
+      const weekAtts: any[] = wd.success ? (wd.data || []) : []
 
-      setEmpStats({ total: emps.length, active: emps.filter((e: any) => e.employmentStatus === 'ACTIVE').length })
-
-      // Filter today's records using PHT date string
-      const todayRecs = atts.filter((r: any) => {
-        const recDatePHT = new Date(r.date).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
-        return recDatePHT === todayStr
-      })
-
-      let present = 0, late = 0, ot = 0, ut = 0
-      todayRecs.forEach((r: any) => {
-        const ci = r.checkInTime ? new Date(r.checkInTime) : null
-        const co = r.checkOutTime ? new Date(r.checkOutTime) : null
-        // Check lateness using PHT hours
-        const ciHourPHT = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', hour12: false })) : 0
-        const ciMinPHT = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', minute: 'numeric' })) : 0
-        const isLate = r.status === 'late' || (ci && (ciHourPHT > 8 || (ciHourPHT === 8 && ciMinPHT > 0)))
-        if (isLate) late++; else if (ci) present++
-        if (ci && co) {
-          const h = (co.getTime() - ci.getTime()) / 3600000
-          h > 8 ? (ot += h - 8) : (ut += 8 - h)
-        }
-      })
-      const absent = Math.max(0, emps.length - present - late)
-      setAttStats({ present, late, absent, overtime: Math.round(ot), undertime: Math.round(ut) })
-      setRate(emps.length > 0 ? Math.round(((present + late) / emps.length) * 100) : 0)
-
-      // ── Weekly trend ──────────────────────────────────
-      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-      const trend: WeekDay[] = []
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday); d.setDate(d.getDate() + i)
-        const ds = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
-        if (ds > todayStr) break
-        const recs = atts.filter((r: any) =>
-          new Date(r.date).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }) === ds
-        )
-        let p = 0, l = 0
-        recs.forEach((r: any) => {
-          const ci = r.checkInTime ? new Date(r.checkInTime) : null
-          const ciH = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', hour12: false })) : 0
-          const ciM = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', minute: 'numeric' })) : 0
-            ; (r.status === 'late' || (ci && (ciH > 8 || (ciH === 8 && ciM > 0)))) ? l++ : ci ? p++ : void 0
+      const activeCount = emps.filter(e => e.employmentStatus === 'ACTIVE').length
+      const todayPHTStr = phtStr(new Date())
+      const weekly: WeekDay[] = weekDates.map(({ day, date }) => {
+        const dateStr = phtStr(date)
+        const dayAtts = weekAtts.filter(a => {
+          // Match on the attendance `date` field (PHT midnight stored as UTC)
+          const recDate = a.date ? phtStr(new Date(a.date)) : ''
+          return recDate === dateStr
         })
-        trend.push({ day: days[i], present: p, late: l, absent: Math.max(0, emps.length - p - l) })
-      }
-      setWeekly(trend)
 
-      // ── Department breakdown ──────────────────────────
-      const dmap = new Map<string, { total: number; present: number }>()
-      // Pre-seed from API departments, then fallback to static list
-      const deptSeed = apiDepts.length > 0 ? apiDepts : DEPARTMENTS
-      deptSeed.forEach(d => dmap.set(d, { total: 0, present: 0 }))
+        // Re-derive present/late from checkInTime (bypass stale DB status)
+        const late = dayAtts.filter(a => a.checkInTime && checkLate(a.checkInTime)).length
+        const present = dayAtts.filter(a => a.checkInTime && !checkLate(a.checkInTime)).length
 
-      // Helper: get department name from employee, checking both string field and relation
-      const getDept = (e: any): string | null =>
-        e?.department || e?.Department?.name || null
+        // Only count absents for days that have already happened (not future days)
+        const absent = dateStr <= todayPHTStr
+          ? Math.max(0, activeCount - present - late)
+          : 0
 
-      emps.forEach((e: any) => {
-        const dept = getDept(e)
-        if (!dept) return
-        if (!dmap.has(dept)) dmap.set(dept, { total: 0, present: 0 })
-        dmap.get(dept)!.total++
+        return { day, present, late, absent }
       })
-      todayRecs.forEach((r: any) => {
-        const e = r.employee || emps.find((x: any) => x.id === r.employeeId)
-        const dept = getDept(e)
-        if (dept && dmap.has(dept)) dmap.get(dept)!.present++
-      })
-      const dArr: DeptStat[] = []
-      dmap.forEach((v, name) => {
-        dArr.push({ name, total: v.total, present: v.present, rate: v.total > 0 ? Math.round((v.present / v.total) * 100) : 0 })
-      })
-      dArr.sort((a, b) => b.total - a.total)
-      setDeptStats(dArr)
+      setWeeklyData(weekly)
 
-      // ── Today's Activity ──────────────────────────────
-      const sorted = [...todayRecs]
-        .filter((r: any) => r.checkInTime || r.checkOutTime)
-        .sort((a: any, b: any) => {
-          const ta = new Date(b.checkOutTime || b.checkInTime).getTime()
-          const tb = new Date(a.checkOutTime || a.checkInTime).getTime()
-          return ta - tb
-        })
-        .slice(0, 5)
-
-      setActivity(sorted.map((r: any, i: number) => {
-        const e = r.employee || emps.find((x: any) => x.id === r.employeeId) || {}
-        const name = `${e.firstName || ''} ${e.lastName || ''}`.trim() || `Employee #${r.employeeId}`
-        const isOut = !!r.checkOutTime
-        const ts = new Date(isOut ? r.checkOutTime : r.checkInTime)
-        const ci = r.checkInTime ? new Date(r.checkInTime) : null
-        const ciHourPHT = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', hour12: false })) : 0
-        const ciMinPHT = ci ? parseInt(ci.toLocaleString('en-US', { timeZone: 'Asia/Manila', minute: 'numeric' })) : 0
-        const isLate = r.status === 'late' || (ci && (ciHourPHT > 8 || (ciHourPHT === 8 && ciMinPHT > 0)))
-        return {
-          id: r.id || i,
-          employee: name,
-          department: getDept(e) || '—',
-          branch: e.branch || '—',
-          action: isOut ? 'Out' : 'In',
-          // Display time in PHT
-          time: ts.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          status: isLate ? 'late' as const : 'on-time' as const,
-        }
+      // Use isActive from DB — kept current by the 30-second syncZkData cron.
+      // No TCP ping needed here; pinging per-device on each load caused 10s+ delays.
+      const devicesWithStatus: DeviceWithStatus[] = deviceList.map(dev => ({
+        ...dev,
+        online: dev.isActive
       }))
+      setDevices(devicesWithStatus)
 
+      setTotalEmployees(activeCount)
+
+      const summaries: BranchSummary[] = branchList.map(b => {
+        const branchEmps = emps.filter(e => e.branch === b.name && e.employmentStatus === 'ACTIVE')
+        // attendance records use lowercase `employee` from Prisma include
+        const branchAtts = atts.filter(a => a.employee?.branch === b.name)
+        const present = branchAtts.filter(a => a.status === 'present' || a.status === 'late').length
+        const late = branchAtts.filter(a => a.status === 'late').length
+        const absent = Math.max(0, branchEmps.length - present)
+        const branchDevice = devicesWithStatus.find(d =>
+          d.location?.toLowerCase().includes(b.name.toLowerCase()) ||
+          b.name.toLowerCase().includes((d.location || '').toLowerCase())
+        )
+        return {
+          branch: b.name,
+          total: branchEmps.length,
+          present,
+          late,
+          absent,
+          deviceOnline: branchDevice?.online ?? null,
+        }
+      })
+
+      setBranchSummaries(summaries)
+
+      // ── KPI totals — recompute lateness from checkInTime (PHT) so stale
+      //    DB status fields on old records don't cause incorrect counts.
+      const todayLate = atts.filter(a => a.checkInTime && checkLate(a.checkInTime)).length
+      const todayPresent = atts.filter(a => a.checkInTime && !checkLate(a.checkInTime)).length
+      setTotalPresent(todayPresent)
+      setTotalLate(todayLate)
+      setTotalAbsent(Math.max(0, activeCount - todayPresent - todayLate))
+
+      // Expand each attendance record into separate check-in and check-out events,
+      // then sort all events together (newest first) and take the top 12.
+      const events: LiveRecord[] = []
+      for (const r of atts) {
+        const empName = `${r.employee?.firstName || ''} ${r.employee?.lastName || ''}`.trim()
+        const dept = r.employee?.Department?.name || r.employee?.department || '—'
+        const branch = r.employee?.branch || '—'
+        const ciStatus: LiveRecord['status'] = r.status === 'absent' ? 'absent' : checkLate(r.checkInTime) ? 'late' : 'on-time'
+
+        // Check-in event
+        if (r.checkInTime) {
+          events.push({
+            id: `${r.id}-in`,
+            employee: empName,
+            department: dept,
+            branch,
+            eventType: 'check-in',
+            time: new Date(r.checkInTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+            eventTs: new Date(r.checkInTime).getTime(),
+            status: ciStatus,
+            shiftType: r.shiftType || 'MORNING',
+          })
+        }
+
+        // Check-out event (only if they've already checked out)
+        if (r.checkOutTime) {
+          events.push({
+            id: `${r.id}-out`,
+            employee: empName,
+            department: dept,
+            branch,
+            eventType: 'check-out',
+            time: new Date(r.checkOutTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+            eventTs: new Date(r.checkOutTime).getTime(),
+            status: ciStatus,  // keep the same on-time/late status from check-in
+            shiftType: r.shiftType || 'MORNING',
+          })
+        }
+      }
+
+      // Sort newest event first, take top 12
+      events.sort((a, b) => b.eventTs - a.eventTs)
+      setActivity(events.slice(0, 12))
     } catch (err) {
       console.error(err)
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [router])
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const employee = localStorage.getItem('employee')
-    if (!token || !employee) { router.replace('/login'); return }
     load()
-    // auto-refresh every 30s
-    const t = setInterval(load, 30000)
+    // Auto-refresh every 30 seconds — load() is fast now (no TCP device pings)
+    const t = setInterval(load, 30_000)
     return () => clearInterval(t)
-  }, [load, router])
+  }, [load])
 
+  const handleRefresh = () => { setRefreshing(true); load() }
+
+  /* ── Loading skeleton ─── */
   if (loading) return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 rounded-full border-4 border-t-transparent animate-spin"
-          style={{ borderColor: `${RED} transparent ${RED} ${RED}` }} />
-        <p className="text-sm text-muted-foreground">Loading dashboard...</p>
+    <div className="flex flex-col gap-3 p-4 lg:p-5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)]">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-7 w-44" />
+        <Skeleton className="h-8 w-28 rounded-lg" />
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-xl" />)}
+      </div>
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-3 min-h-0">
+        <div className="lg:col-span-2 space-y-3">
+          <Skeleton className="h-56 lg:h-48 rounded-xl" />
+          <Skeleton className="h-24 rounded-xl" />
+        </div>
+        <Skeleton className="h-64 lg:h-auto rounded-xl" />
       </div>
     </div>
   )
 
-  const statCards = [
-    { label: 'Total Employees', value: empStats.total, sub: `${empStats.active} active`, icon: Users, color: '#6366f1', bg: '#6366f115' },
-    { label: 'On time', value: attStats.present, sub: `${rate}% rate`, icon: Clock, color: '#22c55e', bg: '#22c55e15' },
-    { label: 'Late', value: attStats.late, sub: `+${attStats.overtime}h overtime`, icon: TrendingUp, color: GOLD, bg: `${GOLD}20` },
-    { label: 'Absent', value: attStats.absent, sub: `${attStats.undertime}h undertime`, icon: AlertCircle, color: RED, bg: `${RED}15` },
-  ]
+  const onlineDevices = devices.filter(d => d.online).length
+  const offlineDevices = devices.filter(d => !d.online).length
+  const todayName = dayNames[new Date().getDay()]
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-2.5 p-4 lg:p-5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)] lg:overflow-hidden">
 
-      {/* ── Header ─────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      {/* ── Header ─── */}
+      <div className="flex items-center justify-between shrink-0">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Welcome to BITS Admin Panel — here&apos;s today&apos;s overview
+          <h1 className="text-lg lg:text-xl font-black text-slate-900 tracking-tight">System Overview</h1>
+          <p className="text-slate-500 text-xs font-semibold">
+            {new Date().toLocaleDateString('en-PH', {
+              timeZone: 'Asia/Manila',
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
           </p>
         </div>
-        <Button style={{ backgroundColor: RED }} className="gap-2 text-white hover:opacity-90">
-          <FileText className="w-4 h-4" />
-          Generate Report
-        </Button>
+        {/* <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+        >
+          <RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing…' : updatedAt}
+        </button> */}
       </div>
 
-      {/* ── 4 Stat Cards ───────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map(({ label, value, sub, icon: Icon, color, bg }) => (
-          <Card key={label} className="bg-card border-border p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="text-3xl font-bold text-foreground mt-1">{value}</p>
-                <p className="text-xs mt-1" style={{ color }}>{sub}</p>
-              </div>
-              <div className="p-2.5 rounded-lg" style={{ backgroundColor: bg }}>
-                <Icon className="w-5 h-5" style={{ color }} />
-              </div>
+      {/* ── KPI Stats ─── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+        {[
+          { label: 'Employees', value: totalEmployees, icon: Users, color: 'text-blue-600', bg: 'bg-blue-50', accent: 'border-blue-100' },
+          { label: 'On Time', value: totalPresent, icon: UserCheck, color: 'text-emerald-600', bg: 'bg-emerald-50', accent: 'border-emerald-100' },
+          { label: 'Late', value: totalLate, icon: Timer, color: 'text-amber-600', bg: 'bg-amber-50', accent: 'border-amber-100' },
+          { label: 'Absent', value: totalAbsent, icon: UserX, color: 'text-rose-600', bg: 'bg-rose-50', accent: 'border-rose-100' },
+        ].map(s => (
+          <div key={s.label} className={`bg-white rounded-xl border ${s.accent} shadow-sm px-3 lg:px-4 py-2.5 lg:py-3 flex items-center gap-2.5`}>
+            <div className={`w-8 h-8 lg:w-9 lg:h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
+              <s.icon className={`w-4 h-4 lg:w-[18px] lg:h-[18px] ${s.color}`} />
             </div>
-          </Card>
+            <div>
+              <p className="text-xl lg:text-2xl font-black text-slate-900 leading-none">{s.value}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">{s.label}</p>
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* ── Chart + Departments ─────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* ── Main content ─── */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-2.5 min-h-0">
 
-        {/* Weekly Attendance Chart */}
-        <Card className="bg-card border-border p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base font-semibold text-foreground">Weekly Attendance</h3>
-            <Badge variant="outline" className="text-xs" style={{ backgroundColor: `${RED}10`, color: RED, borderColor: `${RED}40` }}>
-              This Week
-            </Badge>
-          </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={weekly} barCategoryGap="35%" barGap={2}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-              <XAxis dataKey="day" tick={{ fill: '#6b7280', fontSize: 12 }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
-              <Tooltip
-                cursor={{ fill: 'rgba(0,0,0,0.03)' }}
-                contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, fontSize: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
-                labelStyle={{ color: '#374151', fontWeight: 600 }}
-              />
-              <Bar dataKey="present" name="Present" fill="#22c55e" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="late" name="Late" fill={GOLD} radius={[4, 4, 0, 0]} />
-              <Bar dataKey="absent" name="Absent" fill={RED} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
+        {/* ── Left 2/3: Weekly Chart + Devices ─── */}
+        <div className="lg:col-span-2 flex flex-col gap-2.5 min-h-0">
 
-        {/* Departments Breakdown */}
-        <Card className="bg-card border-border p-5 flex flex-col">
-          <div className="flex items-center justify-between mb-3 shrink-0">
-            <h3 className="text-base font-semibold text-foreground">Departments</h3>
-            <Building2 className="w-4 h-4 text-muted-foreground" />
+          {/* Weekly Attendance Chart */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm flex flex-col min-h-[260px] lg:min-h-0 lg:flex-1">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <CalendarDays className="w-3.5 h-3.5 text-red-500" /> Weekly Attendance
+              </h2>
+              <span className="text-xs text-slate-500 font-bold">Mon – Fri</span>
+            </div>
+            <div className="flex-1 min-h-0 p-3">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weeklyData} barGap={2} barCategoryGap="20%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fontSize: 11, fontWeight: 700, fill: '#64748b' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fontWeight: 600, fill: '#94a3b8' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={32}
+                  />
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.03)', radius: 4 }} />
+                  <Bar dataKey="present" fill="#10b981" radius={[4, 4, 0, 0]} name="Present">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === todayName ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="late" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Late">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === todayName ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="absent" fill="#f43f5e" radius={[4, 4, 0, 0]} name="Absent">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === todayName ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div
-            className="flex-1 space-y-3 overflow-y-auto pr-1"
-            style={{
-              maxHeight: 290,
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#d1d5db transparent',
-            }}
-          >
-            {deptStats.length > 0 ? deptStats.map((dept, i) => {
-              const cols = [RED, ORANGE, GOLD, '#6366f1', '#22c55e']
-              const col = cols[i % cols.length]
-              return (
-                <div key={dept.name}>
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm font-medium text-foreground truncate mr-2">{dept.name}</p>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-muted-foreground">{dept.total} emp</span>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                        style={{ backgroundColor: `${col}15`, color: col }}>
-                        {dept.rate}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-gray-100">
-                    <div
-                      className="h-1.5 rounded-full transition-all duration-500"
-                      style={{ width: `${dept.rate}%`, backgroundColor: col }}
-                    />
-                  </div>
+
+          {/* Biometric Devices */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm shrink-0">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <RadioTower className="w-3.5 h-3.5 text-red-500" /> Devices
+              </h2>
+              <div className="flex gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />{onlineDevices} on
+                </span>
+                <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-rose-500 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />{offlineDevices} off
+                </span>
+              </div>
+            </div>
+            <div className="p-2">
+              {devices.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-4 gap-1.5">
+                  <Fingerprint className="w-6 h-6 text-slate-200" />
+                  <p className="text-slate-400 text-sm font-semibold">No devices configured</p>
+                  <p className="text-slate-300 text-xs">Register a biometric device to get started</p>
                 </div>
-              )
-            }) : (
-              <p className="text-sm text-muted-foreground text-center py-10">No department data yet</p>
-            )}
-          </div>
-        </Card>
-      </div>
-
-      {/* ── Today's Activity Table ──────────────────────── */}
-      <Card className="bg-card border-border p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold text-foreground">Today&apos;s Activity</h3>
-            <span className="flex items-center gap-1 text-xs font-medium text-green-600">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              Live
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">Updated {updatedAt}</span>
-            <button className="flex items-center gap-1 text-xs font-medium hover:opacity-80 transition-opacity"
-              style={{ color: RED }}>
-              View All <ArrowRight className="w-3 h-3" />
-            </button>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {devices.map(dev => (
+                    <div
+                      key={dev.id}
+                      className={`rounded-lg border p-2 flex items-center gap-2 ${dev.online ? 'border-emerald-100 bg-emerald-50/30' : 'border-rose-100 bg-rose-50/30'
+                        }`}
+                    >
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${dev.online ? 'bg-emerald-100' : 'bg-rose-100'
+                        }`}>
+                        <Fingerprint className={`w-3.5 h-3.5 ${dev.online ? 'text-emerald-600' : 'text-rose-500'}`} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-slate-800 truncate leading-tight">{dev.name}</p>
+                        <p className="text-[10px] text-slate-500 font-mono">{dev.ip}:{dev.port}</p>
+                      </div>
+                      {dev.online
+                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        : <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {activity.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Employee</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Branch</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Action</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Time</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activity.map((row) => (
-                  <tr key={row.id} className="border-b border-border/50 hover:bg-secondary/30 transition-colors">
-                    <td className="py-3 px-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-                          style={{ backgroundColor: row.status === 'late' ? RED : '#6366f1' }}>
-                          {row.employee.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="font-medium text-foreground">{row.employee}</p>
-                          <p className="text-[11px] text-muted-foreground">{row.department}</p>
+        {/* ── Right 1/3: Activity Feed ─── */}
+        <div className="flex flex-col min-h-0">
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm flex flex-col min-h-[280px] lg:min-h-0 lg:flex-1 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-red-500" /> Activity
+              </h2>
+              <button
+                onClick={() => router.push('/attendance')}
+                className="flex items-center gap-0.5 text-xs font-black text-red-600 hover:text-red-700 uppercase tracking-wider transition-colors"
+              >
+                All <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {activity.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 px-6 py-8 lg:py-0">
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 bg-slate-100 rounded-full" />
+                    <div className="absolute inset-2 bg-slate-50 rounded-full flex items-center justify-center">
+                      <Clock className="w-6 h-6 text-slate-300" />
+                    </div>
+                    <div className="absolute -right-1 -top-1 w-5 h-5 bg-red-50 rounded-full flex items-center justify-center border-2 border-white">
+                      <Activity className="w-2.5 h-2.5 text-red-400" />
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-slate-500 font-bold text-sm">No activity yet today</p>
+                    <p className="text-slate-400 text-xs mt-0.5 leading-relaxed">
+                      Check-ins will appear here as employees scan
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-50">
+                  {activity.map(a => (
+                    <div key={a.id} className="flex items-center gap-3 px-3 lg:px-4 py-2.5 hover:bg-slate-50/70 transition-colors">
+
+                      {/* Avatar — green for check-in, slate for check-out */}
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${a.eventType === 'check-in'
+                        ? 'bg-linear-to-br from-emerald-400 to-emerald-600'
+                        : 'bg-linear-to-br from-slate-300 to-slate-500'
+                        }`}>
+                        <span className="text-white text-[10px] font-black">{getInitials(a.employee)}</span>
+                      </div>
+
+                      {/* Left: Name + Dept · Branch */}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-800 text-xs leading-tight truncate">{a.employee || '—'}</p>
+                        <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {a.department || '—'}
+                          {a.branch && a.branch !== '—' ? <span className="text-slate-300"> · </span> : ''}
+                          {a.branch && a.branch !== '—' ? <span className="text-slate-400">{a.branch}</span> : ''}
+                        </p>
+                      </div>
+
+                      {/* Middle: Event icon + time */}
+                      <div className="shrink-0 text-right hidden sm:block">
+                        <div className="flex items-center gap-1 justify-end">
+                          {a.eventType === 'check-in'
+                            ? <LogIn className="w-2.5 h-2.5 text-emerald-500" />
+                            : <LogOut className="w-2.5 h-2.5 text-slate-400" />
+                          }
+                          <span className="text-[10px] font-mono text-slate-600">{a.time}</span>
                         </div>
                       </div>
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded-full text-xs bg-secondary text-muted-foreground">
-                        {row.branch}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="flex items-center gap-1 text-sm font-medium"
-                        style={{ color: row.action === 'In' ? '#22c55e' : '#6366f1' }}>
-                        {row.action === 'In' ? '→' : '←'} {row.action}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 font-mono text-muted-foreground text-xs">{row.time}</td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                        style={{
-                          backgroundColor: row.status === 'late' ? `${RED}15` :
-                            row.status === 'absent' ? '#6b728015' :
-                              `${GOLD}20`,
-                          color: row.status === 'late' ? RED :
-                            row.status === 'absent' ? '#6b7280' :
-                              GOLD,
-                        }}>
-                        {row.status === 'on-time' ? 'On Time' : row.status === 'late' ? 'Late' : 'Absent'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+                      {/* Right: Type badge + Status badge */}
+                      <div className="flex flex-col items-end gap-0.5 shrink-0">
+                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${a.eventType === 'check-in'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-slate-50 text-slate-500'
+                          }`}>
+                          {a.eventType === 'check-in' ? 'Check-in' : 'Check-out'}
+                        </span>
+                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${a.status === 'on-time'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : a.status === 'late'
+                            ? 'bg-amber-50 text-amber-700'
+                            : 'bg-rose-50 text-rose-700'
+                          }`}>
+                          {a.status === 'on-time' ? 'On Time' : a.status === 'late' ? 'Late' : 'Absent'}
+                        </span>
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="py-12 text-center">
-            <p className="text-sm text-muted-foreground">No activity recorded today</p>
-          </div>
-        )}
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }
