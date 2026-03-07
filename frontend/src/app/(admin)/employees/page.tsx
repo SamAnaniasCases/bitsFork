@@ -88,12 +88,8 @@ export default function EmployeesPage() {
   const fetchEmployees = async () => {
     setLoading(true)
     try {
-      const token = localStorage.getItem('token')
-      const res = await fetch('/api/employees', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await fetch('/api/employees')
       if (res.status === 401) {
-        localStorage.removeItem('token')
         window.location.href = '/login'
         return
       }
@@ -135,13 +131,9 @@ export default function EmployeesPage() {
   const handleAddEmployee = async () => {
     if (newEmployee.firstName && newEmployee.lastName && newEmployee.department && newEmployee.branch) {
       try {
-        const token = localStorage.getItem('token')
         const res = await fetch('/api/employees', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             firstName: newEmployee.firstName,
             lastName: newEmployee.lastName,
@@ -171,10 +163,8 @@ export default function EmployeesPage() {
     if (!confirmDeactivate) return
     setIsDeactivating(true)
     try {
-      const token = localStorage.getItem('token')
       const res = await fetch(`/api/employees/${confirmDeactivate.id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await res.json()
       if (data.success) {

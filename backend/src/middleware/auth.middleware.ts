@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+// JWT_SECRET is guaranteed to exist at startup by the validation in token.utils.ts.
+// If the server started, this variable is safe to use.
+const JWT_SECRET = process.env.JWT_SECRET as string;
 
 // Extend Express Request type to include user
 declare global {
@@ -28,25 +30,23 @@ export const authenticate = async (
     next: NextFunction
 ): Promise<void> => {
     try {
-        // Extract token from Authorization header
+        // ── Token extraction (cookie-first, then Authorization header) ─────────
+        // Cookies are set as HttpOnly by the Next.js login route handler.
+        // Authorization header fallback keeps backward compatibility.
+        const cookieToken = req.cookies?.auth_token as string | undefined;
         const authHeader = req.headers.authorization;
 
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            res.status(401).json({
-                success: false,
-                message: 'Access denied. No token provided.',
-                error: 'unauthorized'
-            });
-            return;
+        let token: string | undefined;
+        if (cookieToken) {
+            token = cookieToken;
+        } else if (authHeader && authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7);
         }
-
-        // Get token from "Bearer <token>"
-        const token = authHeader.substring(7);
 
         if (!token) {
             res.status(401).json({
                 success: false,
-                message: 'Access denied. Invalid token format.',
+                message: 'Access denied. No token provided.',
                 error: 'unauthorized'
             });
             return;

@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
@@ -21,7 +23,22 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 
-app.use(cors());
+// ── CORS config ───────────────────────────────────────────────────────────────
+// FRONTEND_URL:
+//   LOCAL  → set in backend/.env  (e.g. http://localhost:3010)
+//   DOCKER → set in docker-compose.yml (e.g. http://localhost:3010 or server IP)
+// Falls back to localhost:3010 so local dev works without any extra config.
+const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3010';
+
+// ── Security middleware (must come before routes) ──────────────────────────────
+app.use(helmet());        // Sets secure HTTP headers on every response
+app.use(cookieParser());  // Parses incoming cookies so req.cookies.auth_token is available
+app.use(cors({
+  origin: allowedOrigin,
+  credentials: true,    // Required if we add HttpOnly cookie auth (Phase 4)
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
 app.use(express.json());
 app.use(morgan('dev')); // Request logging

@@ -1,7 +1,39 @@
 import { Router } from 'express';
-import { register, login, refreshToken } from '../controllers/auth.controller';
+import { register, login, refreshToken, logout } from '../controllers/auth.controller';
 import { validate } from '../middleware/validation.middleware';
-import { registerValidator, loginValidator, refreshValidator } from '../validators/auth.validator';
+import { registerValidator, loginValidator } from '../validators/auth.validator';
+import { authenticate } from '../middleware/auth.middleware';
+import { adminOnly } from '../middleware/role.middleware';
+import rateLimit from 'express-rate-limit';
+
+// ── Rate Limiters ─────────────────────────────────────────────────────────────
+
+/** Login: max 10 attempts per 15 minutes per IP */
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many login attempts. Please try again in 15 minutes.', error: 'rate_limited' }
+});
+
+/** Refresh: max 30 refreshes per 15 minutes per IP */
+const refreshLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many token refresh requests. Please try again later.', error: 'rate_limited' }
+});
+
+/** Register: max 5 new accounts per hour per IP */
+const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many registration attempts. Please try again in 1 hour.', error: 'rate_limited' }
+});
 
 const router = Router();
 
@@ -16,8 +48,10 @@ const router = Router();
  * @swagger
  * /api/auth/register:
  *   post:
- *     summary: Register a new employee
+ *     summary: Register a new user (Admin only)
  *     tags: [Auth]
+ *     security:
+ *       - cookieAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -56,8 +90,12 @@ const router = Router();
  *         description: User created successfully
  *       400:
  *         description: Validation error or user already exists
+ *       401:
+ *         description: Unauthorized - must be logged in
+ *       403:
+ *         description: Forbidden - ADMIN role required
  */
-router.post('/register', validate(registerValidator), register);
+router.post('/register', registerLimiter, authenticate, adminOnly, validate(registerValidator), register);
 
 /**
  * @swagger
@@ -94,7 +132,7 @@ router.post('/register', validate(registerValidator), register);
  *       401:
  *         description: Invalid credentials
  */
-router.post('/login', validate(loginValidator), login);
+router.post('/login', loginLimiter, validate(loginValidator), login);
 
 /**
  * @swagger
@@ -119,6 +157,20 @@ router.post('/login', validate(loginValidator), login);
  *       401:
  *         description: Invalid refresh token
  */
-router.post('/refresh', validate(refreshValidator), refreshToken);
+router.post('/refresh', refreshLimiter, refreshToken);
+
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Logout - clears auth cookies and invalidates refresh token in DB
+ *     tags: [Auth]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ */
+router.post('/logout', logout);
 
 export default router;

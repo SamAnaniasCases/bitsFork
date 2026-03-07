@@ -41,9 +41,10 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
+  const handleLogout = async () => {
+    // Clear the HttpOnly cookie via the server-side route handler
+    await fetch('/api/auth/logout', { method: 'POST' });
+    // Clear non-sensitive cached user data from localStorage
     localStorage.removeItem('employee');
     router.push('/login');
   };

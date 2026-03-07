@@ -102,8 +102,6 @@ export default function AttendancePage() {
     setLoading(true)
     setDebugInfo(null)
     try {
-      const token = localStorage.getItem('token')
-
       // Build query params
       const params = new URLSearchParams();
       if (attendanceDate) {
@@ -114,18 +112,10 @@ export default function AttendancePage() {
       params.append('limit', rowsPerPage.toString());
 
       if (selectedStatus !== 'all') params.append('status', selectedStatus);
-      // Backend doesn't support branch/dept filtering yet directly in this endpoint easily
-      // without joining tables in the query, but we can add it later.
-      // For now, search and basic filters.
 
-      const res = await fetch(`/api/attendance?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
+      const res = await fetch(`/api/attendance?${params.toString()}`)
 
       if (res.status === 401) {
-        localStorage.removeItem('token')
         window.location.href = '/login'
         return
       }

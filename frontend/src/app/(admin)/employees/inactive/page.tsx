@@ -39,12 +39,8 @@ export default function InactiveEmployeesPage() {
   const fetchInactiveEmployees = async () => {
     setLoading(true)
     try {
-      const token = localStorage.getItem('token')
-      const res = await fetch('/api/employees', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await fetch('/api/employees')
       if (res.status === 401) {
-        localStorage.removeItem('token')
         window.location.href = '/login'
         return
       }
@@ -79,10 +75,8 @@ export default function InactiveEmployeesPage() {
     if (!confirmRestore) return
     setIsRestoring(true)
     try {
-      const token = localStorage.getItem('token')
       const res = await fetch(`/api/employees/${confirmRestore.id}/reactivate`, {
         method: 'PATCH',
-        headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await res.json()
       if (data.success) {
@@ -103,10 +97,8 @@ export default function InactiveEmployeesPage() {
     if (!confirmDelete) return
     setIsDeleting(true)
     try {
-      const token = localStorage.getItem('token')
       const res = await fetch(`/api/employees/${confirmDelete.id}/permanent`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await res.json()
       if (data.success) {

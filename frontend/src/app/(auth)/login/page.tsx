@@ -44,7 +44,7 @@ export default function LoginPage() {
     setIsLoading(true)
 
     try {
-      const res = await fetch('http://localhost:3001/api/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -72,8 +72,13 @@ export default function LoginPage() {
         return
       }
 
-      // Store token and employee data
-      localStorage.setItem('token', data.accessToken)
+      // Clean up any stale keys left over from the old localStorage-token auth flow
+      localStorage.removeItem('token')
+      localStorage.removeItem('refreshToken')
+      localStorage.removeItem('user')
+
+      // Token is set as HttpOnly cookie by the login route handler.
+      // Only cache non-sensitive employee info for UI display.
       localStorage.setItem('employee', JSON.stringify(data.employee))
 
       // Determine redirect path

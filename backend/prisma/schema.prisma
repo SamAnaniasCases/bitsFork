@@ -121,7 +121,21 @@ model Shift {
   Employee  Employee[]
 }
 
+model RefreshToken {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  employeeId Int
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([token])
+  @@index([expiresAt])
+}
+
 enum EmploymentStatus {
+
   ACTIVE
   INACTIVE
   TERMINATED

@@ -81,12 +81,11 @@ export default function ReportsPage() {
       const headers = { 'Authorization': `Bearer ${token}` };
 
       const [empRes, attRes] = await Promise.all([
-        fetch('/api/employees', { headers }),
-        fetch(`/api/attendance?startDate=${startDate}&endDate=${endDate}&limit=10000`, { headers })
+        fetch('/api/employees'),
+        fetch(`/api/attendance?startDate=${startDate}&endDate=${endDate}&limit=10000`)
       ]);
 
       if (empRes.status === 401 || attRes.status === 401) {
-        localStorage.removeItem('token');
         window.location.href = '/login';
         return;
       }
