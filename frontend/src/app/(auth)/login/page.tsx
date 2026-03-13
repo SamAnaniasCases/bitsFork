@@ -81,6 +81,15 @@ export default function LoginPage() {
       // Only cache non-sensitive employee info for UI display.
       localStorage.setItem('employee', JSON.stringify(data.employee))
 
+      // Confirm the token is actually readable before navigating
+      // (guards against any edge-case where setItem is async-deferred)
+      const stored = localStorage.getItem('token')
+      if (!stored) {
+        setValidationErrors({ password: 'Failed to save session. Please try again.' })
+        setIsLoading(false)
+        return
+      }
+
       // Determine redirect path
       let path = '/login'
       if (data.employee.role === 'HR') {
@@ -89,12 +98,15 @@ export default function LoginPage() {
         path = '/dashboard'
       }
 
-      // Show loading screen then redirect
+      // Show loading screen then do a full hard navigation (window.location.href).
+      // This is intentional — unlike router.push(), a hard nav guarantees the new
+      // page boots AFTER localStorage is fully written, fixing the race condition
+      // where the dashboard auth check would read an empty token on first login.
       setRedirectPath(path)
       setShowLoading(true)
       setTimeout(() => {
-        router.push(path)
-      }, 2500)
+        window.location.href = path
+      }, 2400)
     } catch (error: any) {
       setValidationErrors({
         ...validationErrors,

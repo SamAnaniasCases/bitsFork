@@ -16,6 +16,20 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
   const [profileImage, setProfileImage] = useState<string | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const [userName, setUserName] = useState('')
+  const [deviceOnline, setDeviceOnline] = useState<boolean | null>(null)
+
+  const checkDevice = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch('/api/health/device', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      })
+      const data = await res.json()
+      setDeviceOnline(data.online === true)
+    } catch {
+      setDeviceOnline(false)
+    }
+  }
 
   useEffect(() => {
     try {
@@ -31,6 +45,12 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
     setTime(new Date())
     const timer = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    checkDevice()
+    const interval = setInterval(checkDevice, 15000)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
@@ -80,14 +100,24 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
       </div>
 
       <div className="flex items-center gap-3 md:gap-6">
-        {/* System Status */}
-        <div className="hidden md:flex items-center gap-3 px-3 py-1.5 bg-emerald-50 border border-emerald-100 rounded-full">
+        {/* Device Status
+        <div className={`hidden md:flex items-center gap-3 px-3 py-1.5 border rounded-full transition-all duration-500 ${deviceOnline === null
+          ? 'bg-gray-50 border-gray-200'
+          : deviceOnline
+            ? 'bg-emerald-50 border-emerald-100'
+            : 'bg-rose-50 border-rose-100'
+          }`}>
           <div className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${deviceOnline === null ? 'bg-gray-400' : deviceOnline ? 'bg-emerald-400' : 'bg-rose-400'
+              }`}></span>
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${deviceOnline === null ? 'bg-gray-400' : deviceOnline ? 'bg-emerald-500' : 'bg-rose-500'
+              }`}></span>
           </div>
-          <span className="text-[10px] font-black text-emerald-700 uppercase tracking-tighter">System Online</span>
-        </div>
+          <span className={`text-[10px] font-black uppercase tracking-tighter ${deviceOnline === null ? 'text-gray-500' : deviceOnline ? 'text-emerald-700' : 'text-rose-700'
+            }`}>
+            {deviceOnline === null ? 'Checking...' : deviceOnline ? 'Device Online' : 'Device Offline'}
+          </span>
+        </div> */}
 
         {/* System Time */}
         <div className="hidden sm:block text-right border-l pl-6 border-gray-200">

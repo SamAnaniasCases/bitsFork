@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Users, Clock, FileText, LayoutDashboard, UserCog, UserX, ChevronDown, Building2, Menu, X } from 'lucide-react'
+import { Users, Clock, FileText, LayoutDashboard, UserCog, UserX, ChevronDown, Building2, Menu, X, Fingerprint, RadioTower, ScrollText } from 'lucide-react'
 import { useRef, useState, useEffect, useCallback } from 'react'
 
 interface AdminSidebarProps {
@@ -26,8 +26,11 @@ export function AdminSidebar({ isOpen, isCollapsed, onClose, onToggleCollapse }:
   const navItems = [
     { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { label: 'Organization', href: '/departments', icon: Building2 },
-    { label: 'Attendance', href: '/attendance', icon: Clock },
+    { label: 'Shifts', href: '/shifts', icon: Clock },
+    { label: 'Attendance', href: '/attendance', icon: Fingerprint },
+    { label: 'Devices', href: '/devices', icon: RadioTower },
     { label: 'Reports', href: '/admin/reports', icon: FileText },
+    { label: 'System Logs', href: '/admin/logs', icon: ScrollText },
     { label: 'User Accounts', href: '/admin/user-accounts', icon: UserCog },
   ]
 
@@ -36,8 +39,11 @@ export function AdminSidebar({ isOpen, isCollapsed, onClose, onToggleCollapse }:
     { href: '/dashboard' },
     { href: '/employees', matchPrefix: '/employees' },
     { href: '/departments' },
+    { href: '/shifts' },
     { href: '/attendance' },
+    { href: '/devices' },
     { href: '/admin/reports' },
+    { href: '/admin/logs' },
     { href: '/admin/user-accounts' },
   ]
 

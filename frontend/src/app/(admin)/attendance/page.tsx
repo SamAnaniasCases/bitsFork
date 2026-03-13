@@ -1,79 +1,127 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import { Card } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
+  Fingerprint,
   Search,
   Download,
+  MapPin,
   Users,
   Clock,
   AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Building2,
   TrendingUp,
   TrendingDown,
   Timer,
-  ChevronLeft,
-  ChevronRight
+  GitBranch,
 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
-const branches = ['MAIN OFFICE', 'CEBU BRANCH', 'MAKATI BRANCH']
+interface Branch {
+  id: number
+  name: string
+  address?: string | null
+}
 
-export default function AttendancePage() {
+interface Department {
+  id: number
+  name: string
+}
+
+export default function BiometricPage() {
+  const [branches, setBranches] = useState<Branch[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [activeBranchId, setActiveBranchId] = useState<'all' | number>('all')
+  const [records, setRecords] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Filters
   const [searchTerm, setSearchTerm] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedStatus, setSelectedStatus] = useState('all')
-  const [selectedBranch, setSelectedBranch] = useState('all')
-  const [selectedDept, setSelectedDept] = useState('all')
+  const [selectedDeptId, setSelectedDeptId] = useState('all')
+  // Always use PHT (Asia/Manila) date so the filter is correct regardless of the client machine's timezone
+  const [selectedDate, setSelectedDate] = useState(() =>
+    new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+  )
 
-  // Default to today
-  const getTodayDate = () => {
-    const today = new Date();
-    const offset = today.getTimezoneOffset();
-    const localDate = new Date(today.getTime() - (offset * 60 * 1000));
-    return localDate.toISOString().split('T')[0];
-  };
-  const [attendanceDate, setAttendanceDate] = useState(getTodayDate())
-
-  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  // Pagination
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const rowsPerPage = 10
 
-  // Dynamic departments from API
-  const [departments, setDepartments] = useState<string[]>([])
+  // Stats
+  const [stats, setStats] = useState({
+    onTime: 0,
+    totalLate: 0,
+    totalAbsent: 0,
+    total: 0,
+    avgHours: '0',
+    totalOvertime: '0',
+    totalUndertime: '0',
+  })
 
-  // Helper to extract PHT hour and minute from a Date
+  /* ── Helpers ── */
   const getPHTTime = (date: Date) => {
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Manila',
-      hour: 'numeric',
-      minute: 'numeric',
-      hour12: false
-    })
-    const parts = formatter.formatToParts(date)
-    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0')
-    const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0')
-    return { hour, minute }
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila', hour: 'numeric', minute: 'numeric', hour12: false
+    }).formatToParts(date)
+    return {
+      hour: parseInt(parts.find(p => p.type === 'hour')?.value || '0'),
+      minute: parseInt(parts.find(p => p.type === 'minute')?.value || '0'),
+    }
   }
 
-  // Debounce search term to prevent too many API calls
-  const [debouncedSearch, setDebouncedSearch] = useState(searchTerm)
+  const formatLate = (mins: number | null | undefined): string => {
+    if (!mins || mins <= 0) return '—'
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+
+  /** Convert decimal hours (e.g. 1.53) to "1h 32m" */
+  const fmtHours = (hours: number): string => {
+    if (!hours || hours <= 0) return '—'
+    const h = Math.floor(hours)
+    const m = Math.round((hours - h) * 60)
+    if (h === 0) return `${m}m`
+    if (m === 0) return `${h}h`
+    return `${h}h ${m}m`
+  }
+
+  /** Convert minutes to "Xh Ym" */
+  const fmtMins = (mins: number): string => {
+    if (!mins || mins <= 0) return '—'
+    const h = Math.floor(mins / 60)
+    const m = Math.round(mins % 60)
+    if (h === 0) return `${m}m`
+    if (m === 0) return `${h}h`
+    return `${h}h ${m}m`
+  }
+
+  /* ── Debounce search ── */
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 500)
-    return () => clearTimeout(timer)
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), 400)
+    return () => clearTimeout(t)
   }, [searchTerm])
 
+  /* ── Reset page on filter change ── */
   useEffect(() => {
-    fetchAttendance()
-  }, [attendanceDate, currentPage, selectedBranch, selectedDept, selectedStatus, debouncedSearch])
+    setCurrentPage(1)
+  }, [activeBranchId, selectedDate, selectedStatus, selectedDeptId, debouncedSearch])
 
-  // Fetch departments dynamically
+  /* ── Fetch branches ── */
   useEffect(() => {
-    const fetchDepts = async () => {
+    const run = async () => {
       try {
         const res = await fetch('/api/departments')
         if (res.ok) {
@@ -82,35 +130,47 @@ export default function AttendancePage() {
             setDepartments(data.departments.map((d: any) => d.name))
           }
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
-    fetchDepts()
+    run()
   }, [])
 
-  // Simple stats state
-  const [stats, setStats] = useState({
-    totalPresent: 0,
-    totalAbsent: 0,
-    totalLate: 0,
-    avgHours: '0',
-    totalOvertime: '0',
-    totalUndertime: '0'
-  })
+  /* ── Fetch departments ── */
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch('/api/departments', { headers: { Authorization: `Bearer ${token}` } })
+        const data = await res.json()
+        if (data.success && data.departments) setDepartments(data.departments)
+      } catch { /* ignore */ }
+    }
+    run()
+  }, [])
 
-  const fetchAttendance = async () => {
+  /* ── Fetch records ── */
+  const fetchRecords = useCallback(async () => {
     setLoading(true)
-    setDebugInfo(null)
+    setError(null)
     try {
-      // Build query params
-      const params = new URLSearchParams();
-      if (attendanceDate) {
-        params.append('startDate', attendanceDate);
-        params.append('endDate', attendanceDate);
+      const token = localStorage.getItem('token')
+      const params = new URLSearchParams({
+        startDate: selectedDate,
+        endDate: selectedDate,
+        limit: '9999',
+      })
+      // Branch tab uses the branch NAME (employee.branch is a plain string, not a relation)
+      if (activeBranchId !== 'all') {
+        const branchName = branches.find(b => b.id === activeBranchId)?.name
+        if (branchName) params.append('branchName', branchName)
       }
-      params.append('page', currentPage.toString());
-      params.append('limit', rowsPerPage.toString());
-
-      if (selectedStatus !== 'all') params.append('status', selectedStatus);
+      if (selectedStatus !== 'all') params.append('status', selectedStatus)
+      if (selectedDeptId !== 'all') {
+        params.append('departmentId', selectedDeptId)
+        // Also send the name so the backend OR filter can match the legacy string field
+        const deptName = departments.find(d => String(d.id) === selectedDeptId)?.name
+        if (deptName) params.append('departmentName', deptName)
+      }
 
       const res = await fetch(`/api/attendance?${params.toString()}`)
 
@@ -120,326 +180,398 @@ export default function AttendancePage() {
       }
 
       const data = await res.json()
-
       if (data.success) {
-        // Filter out ADMIN and HR role employees — they should only appear in User Accounts tab
         const userRecords = data.data.filter((log: any) => {
           const emp = log.employee || log.Employee || {}
           return emp.role === 'USER' || !emp.role
         })
 
-        // Map and Calculate Hours
         const mapped = userRecords.map((log: any) => {
+          const emp = log.employee || log.Employee || {}
           const checkIn = new Date(log.checkInTime)
           const checkOut = log.checkOutTime ? new Date(log.checkOutTime) : null
-          let hours = 0
-          if (checkOut) {
-            const diffMs = checkOut.getTime() - checkIn.getTime()
-            hours = diffMs / (1000 * 60 * 60)
-          }
 
-          // Simple OT/UT logic (Assuming 9 hour work day including 1hr break = 8 working hours?)
-          // Let's assume 8 working hours required.
-          const requiredHours = 8
-          const overtime = hours > requiredHours ? hours - requiredHours : 0
-          const undertime = (hours > 0 && hours < requiredHours) ? requiredHours - hours : 0
+          // Prefer backend-calculated values (shift-aware); fall back to raw time diff
+          const totalHours: number = log.totalHours ?? (checkOut ? (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60) : 0)
+          const lateMinutes: number = log.lateMinutes ?? 0
+          const overtimeMinutes: number = log.overtimeMinutes ?? (totalHours > 8 ? (totalHours - 8) * 60 : 0)
+          const undertimeMinutes: number = log.undertimeMinutes ?? (totalHours > 0 && totalHours < 8 ? (8 - totalHours) * 60 : 0)
+          const shiftCode: string | null = log.shiftCode ?? emp.Shift?.shiftCode ?? null
+          const isAnomaly: boolean = log.isAnomaly ?? false
 
-          // Use PHT hours for late detection (consistent with dashboard)
-          const { hour: ciHourPHT, minute: ciMinPHT } = getPHTTime(checkIn)
-          const isLate = (ciHourPHT > 8 || (ciHourPHT === 8 && ciMinPHT > 30));
-
-          const emp = log.employee || log.Employee || {};
+          const status = isAnomaly ? 'anomaly' : lateMinutes > 0 ? 'late' : (log.status || 'present')
 
           return {
-            ...log, // keep original data for debug — MUST be first so computed fields below take priority
             id: log.id,
             employeeId: log.employeeId,
-            employeeName: emp.firstName ? `${emp.firstName} ${emp.lastName}` : 'Unknown Employee',
-            branch: emp.branch || 'MAIN OFFICE', // Fallback
+            employeeName: emp.firstName ? `${emp.firstName} ${emp.lastName}` : 'Unknown',
+            branchName: emp.branch || '—',
             department: emp.Department?.name || emp.department || 'General',
             date: new Date(log.date).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' }),
-            checkIn: log.checkInTimePH || checkIn.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
-            checkOut: log.checkOutTime ? (log.checkOutTimePH || checkOut?.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' })) : '-',
-            status: isLate ? 'late' : (log.status || 'present'),
-            hours: hours,
-            overtime: overtime,
-            undertime: undertime,
+            checkIn: checkIn.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: true }),
+            checkOut: checkOut
+              ? checkOut.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: true })
+              : '—',
+            lateMinutes,
+            status,
+            shiftCode,
+            isNightShift: emp.Shift?.isNightShift ?? false,
+            totalHours,
+            overtimeMinutes,
+            undertimeMinutes,
+            isAnomaly,
           }
         })
 
-        // Client-side text search (temporary until backend search is implemented)
-        // Since we are now paginating, client-side search only works on the CURRENT page.
-        // For full search, we need backend support.
-        // For now, we will just display the mapped records from backend.
+        // Fetch all active employees and inject absent rows
+        const token2 = localStorage.getItem('token')
+        let allEmployees: any[] = []
+        try {
+          const empRes = await fetch('/api/employees?limit=9999', { headers: { Authorization: `Bearer ${token2}` } })
+          const empData = await empRes.json()
+          if (empData.success) allEmployees = (empData.employees || empData.data || []).filter((e: any) => (e.role === 'USER' || !e.role) && (e.employmentStatus === 'ACTIVE' || !e.employmentStatus))
+        } catch { /* ignore */ }
 
-        setAttendanceRecords(mapped)
-        setTotalPages(data.meta?.totalPages || 1)
+        // Determine which employees have no record today
+        const presentIds = new Set(mapped.map((r: any) => r.employeeId))
+        // Filter allEmployees by the currently active branch tab
+        const branchName = activeBranchId !== 'all' ? branches.find(b => b.id === activeBranchId)?.name : null
+        const absentRows = allEmployees
+          .filter((e: any) => {
+            if (presentIds.has(e.id)) return false
+            if (branchName && e.branch !== branchName) return false
+            return true
+          })
+          .map((e: any) => ({
+            id: `absent-${e.id}`,
+            employeeId: e.id,
+            employeeName: `${e.firstName} ${e.lastName}`,
+            branchName: e.branch || '—',
+            department: e.Department?.name || e.department || 'General',
+            date: selectedDate,
+            checkIn: '—',
+            checkOut: '—',
+            lateMinutes: 0,
+            status: 'absent',
+            shiftCode: e.Shift?.shiftCode ?? null,
+            isNightShift: e.Shift?.isNightShift ?? false,
+            totalHours: 0,
+            overtimeMinutes: 0,
+            undertimeMinutes: 0,
+            isAnomaly: false,
+          }))
 
-        // Correction: Stats should ideally come from backend aggregation to be accurate across ALL pages.
-        // For now, we'll hide the stats or show stats only for current page, or (better) fetch stats separately.
-        // Let's calculate stats for current page for now to keep it simple, but note it as a limitation.
+        const full = [...mapped, ...absentRows]
 
-        const currentStats = {
-          totalPresent: mapped.filter((r: any) => r.status === 'present').length,
-          totalAbsent: mapped.filter((r: any) => r.status === 'absent').length,
-          totalLate: mapped.filter((r: any) => r.status === 'late').length,
-          avgHours: mapped.length > 0
-            ? (mapped.filter((r: any) => r.hours > 0).reduce((sum: number, r: any) => sum + r.hours, 0) / mapped.filter((r: any) => r.hours > 0).length).toFixed(1)
+        const filtered = debouncedSearch
+          ? full.filter((r: any) => r.employeeName.toLowerCase().includes(debouncedSearch.toLowerCase()))
+          : full
+
+        setRecords(filtered)
+        setTotalPages(Math.max(1, Math.ceil(filtered.length / rowsPerPage)))
+        setStats({
+          onTime: filtered.filter((r: any) => r.status === 'present').length,
+          totalLate: filtered.filter((r: any) => r.status === 'late').length,
+          totalAbsent: filtered.filter((r: any) => r.status === 'absent').length,
+          total: filtered.length,
+          avgHours: filtered.length > 0
+            ? (filtered.filter((r: any) => r.totalHours > 0).reduce((s: number, r: any) => s + r.totalHours, 0) /
+              (filtered.filter((r: any) => r.totalHours > 0).length || 1)).toFixed(1)
             : '0',
-          totalOvertime: mapped.reduce((sum: number, r: any) => sum + r.overtime, 0).toFixed(1),
-          totalUndertime: mapped.reduce((sum: number, r: any) => sum + r.undertime, 0).toFixed(1)
-        }
-        setStats(currentStats)
-
-        setDebugInfo({
-          message: 'Fetch Success',
-          count: data.data.length,
-          total: data.meta?.total
+          totalOvertime: (filtered.reduce((s: number, r: any) => s + (r.overtimeMinutes ?? 0), 0) / 60).toFixed(1),
+          totalUndertime: (filtered.reduce((s: number, r: any) => s + (r.undertimeMinutes ?? 0), 0) / 60).toFixed(1),
         })
       } else {
-        const errorMsg = data.message || data.error || 'Unknown server error';
-        console.error("Failed to fetch records:", errorMsg)
-        setDebugInfo({ error: errorMsg })
+        setError(data.message || 'Failed to fetch records')
       }
-    } catch (error: any) {
-      console.error("Error fetching attendance records", error)
-      setDebugInfo({ error: error.message || 'Unknown fetch error' })
+    } catch (e: any) {
+      setError(e.message || 'Network error')
     } finally {
       setLoading(false)
     }
-  }
+  }, [activeBranchId, selectedDate, selectedStatus, selectedDeptId, currentPage, debouncedSearch, branches])
 
-  // Apply client-side filters for department, branch, and search (backend doesn't support these yet)
-  const paginatedRecords = attendanceRecords.filter((r: any) => {
-    if (selectedDept !== 'all' && r.department !== selectedDept) return false
-    if (selectedBranch !== 'all' && r.branch !== selectedBranch) return false
-    if (debouncedSearch && !r.employeeName.toLowerCase().includes(debouncedSearch.toLowerCase())) return false
-    return true
-  });
+  useEffect(() => { fetchRecords() }, [fetchRecords])
 
-
-
+  /* ── Export ── */
   const handleExport = () => {
-    const headers = ['Employee', 'Branch', 'Date', 'Check In', 'Check Out', 'Hours', 'Overtime', 'Undertime', 'Status']
-    const rows = attendanceRecords.map(r => [
-      r.employeeName,
-      r.branch,
-      r.date,
-      r.checkIn,
-      r.checkOut,
-      r.hours.toFixed(2),
-      r.overtime.toFixed(2),
-      r.undertime.toFixed(2),
-      r.status.charAt(0).toUpperCase() + r.status.slice(1)
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
+    const date = new Date(selectedDate + 'T00:00:00')
+    const formattedDate = `${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`
+    const branchLabel = activeBranchId === 'all' ? 'All Branches' : (branches.find(b => b.id === activeBranchId)?.name || 'Branch')
+
+    const presentCount = records.filter(r => r.status === 'present').length
+    const lateCount = records.filter(r => r.status === 'late').length
+    const anomalyCount = records.filter((r: any) => r.isAnomaly).length
+    const absentCount = records.filter(r => r.status === 'absent').length
+    const avgHoursNum = parseFloat(stats.avgHours)
+
+    const allRows: (string | number)[][] = []
+
+    // ── Header block ──
+    allRows.push(['BITS Attendance Report'])
+    allRows.push(['Branch', branchLabel])
+    allRows.push(['Date', formattedDate])
+    allRows.push(['Generated', new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })])
+    allRows.push([])
+
+    // ── Summary stats ──
+    allRows.push(['SUMMARY'])
+    allRows.push(['Total Employees', records.length, '', 'Avg Hours', `${stats.avgHours}h`])
+    allRows.push(['On Time', presentCount,        '', 'Overtime Total', `${stats.totalOvertime}h`])
+    allRows.push(['Late',    lateCount,           '', 'Undertime Total', `${stats.totalUndertime}h`])
+    allRows.push(['Anomaly', anomalyCount])
+    allRows.push(['Absent',  absentCount])
+    allRows.push([])
+
+    // ── Column headers ──
+    allRows.push([
+      '#', 'Employee', 'Branch', 'Department', 'Shift',
+      'Check In', 'Check Out', 'Hours Worked',
+      'Late By', 'Overtime', 'Undertime', 'Status'
     ])
 
-    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
+    // ── Data rows ──
+    records.forEach((r, i) => {
+      const statusLabel = (r as any).isAnomaly
+        ? 'Anomaly'
+        : r.status.charAt(0).toUpperCase() + r.status.slice(1)
+      allRows.push([
+        i + 1,
+        r.employeeName,
+        r.branchName,
+        r.department,
+        r.shiftCode || 'No Shift',
+        r.checkIn,
+        r.checkOut,
+        r.totalHours > 0 ? fmtHours(r.totalHours) : '—',
+        formatLate(r.lateMinutes),
+        r.overtimeMinutes  > 0 ? `+${fmtMins(r.overtimeMinutes)}`  : '—',
+        r.undertimeMinutes > 0 ? `-${fmtMins(r.undertimeMinutes)}` : '—',
+        statusLabel,
+      ])
+    })
 
-    const branchLabel = selectedBranch === 'all' ? 'All-Branches' : selectedBranch.replace(/\s+/g, '-')
-    link.download = `Attendance_${branchLabel}_${attendanceDate}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+    allRows.push([])
+    allRows.push([`${records.length} employee record${records.length !== 1 ? 's' : ''} · ${selectedDate}`])
+
+    // ── Build workbook ──
+    const worksheet = XLSX.utils.aoa_to_sheet(allRows)
+    worksheet['!cols'] = [
+      { wch: 4  },  // #
+      { wch: 25 },  // Employee
+      { wch: 18 },  // Branch
+      { wch: 18 },  // Department
+      { wch: 15 },  // Shift
+      { wch: 12 },  // Check In
+      { wch: 12 },  // Check Out
+      { wch: 14 },  // Hours Worked
+      { wch: 12 },  // Late By
+      { wch: 10 },  // Overtime
+      { wch: 10 },  // Undertime
+      { wch: 12 },  // Status
+    ]
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Attendance')
+    XLSX.writeFile(workbook, `Attendance_${branchLabel.replace(/\s+/g, '_')}_${selectedDate}.xlsx`)
   }
 
-  const [debugInfo, setDebugInfo] = useState<any>(null)
+  const activeBranch = activeBranchId !== 'all' ? branches.find(b => b.id === activeBranchId) : null
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
+
+      {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Attendance</h2>
-          <p className="text-muted-foreground text-sm mt-1">Monitor employee check-ins, overtime, and undertime</p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+            <Fingerprint className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Biometric Attendance</h2>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+              })}
+            </p>
+          </div>
         </div>
-        <Button onClick={handleExport} className="bg-primary hover:bg-primary/90 gap-2 w-full sm:w-auto">
-          <Download className="w-4 h-4" />
-          Export Report
-        </Button>
+        <div className="flex items-center gap-2">
+          <Input
+            type="date"
+            value={selectedDate}
+            onChange={e => setSelectedDate(e.target.value)}
+            className="bg-secondary border-border text-foreground w-40"
+          />
+          <Button onClick={handleExport} className="bg-primary hover:bg-primary/90 gap-2 shrink-0">
+            <Download className="w-4 h-4" />
+            Export
+          </Button>
+        </div>
       </div>
 
-      {debugInfo?.error && (
+      {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
-          <AlertDescription>
-            {debugInfo.error}
-          </AlertDescription>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      {/* { DEBUG PANEL
-      <Card className="bg-yellow-50 border-yellow-200 p-4 mb-4">
-        <h3 className="font-bold text-yellow-800 mb-2">Debug Info (Technical)</h3>
-        <pre className="text-xs overflow-auto max-h-40 bg-white p-2 border border-yellow-100 rounded">
-          {JSON.stringify({
-            loading,
-            recordsCount: attendanceRecords.length,
-            filteredCount: filteredRecords.length,
-            firstRecord: attendanceRecords[0],
-            rawEmployee: attendanceRecords[0]?.employee || 'N/A',
-            filters: { searchTerm, selectedStatus, selectedBranch, selectedDept, attendanceDate },
-            fetchError: debugInfo
-          }, null, 2)}
-        </pre> }
-      </Card> */}
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Present</p>
-              <p className="text-2xl sm:text-3xl font-bold text-foreground mt-1 sm:mt-2">{stats.totalPresent}</p>
-            </div>
-            <div className="bg-primary/20 p-2 sm:p-3 rounded-lg">
-              <Users className="w-4 h-4 sm:w-6 sm:h-6 text-primary" />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Late</p>
-              <p className="text-2xl sm:text-3xl font-bold text-foreground mt-1 sm:mt-2">{stats.totalLate}</p>
-            </div>
-            <div className="bg-yellow-500/20 p-2 sm:p-3 rounded-lg">
-              <Clock className="w-4 h-4 sm:w-6 sm:h-6 text-yellow-400" />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Absent</p>
-              <p className="text-2xl sm:text-3xl font-bold text-foreground mt-1 sm:mt-2">{stats.totalAbsent}</p>
-            </div>
-            <div className="bg-red-500/20 p-2 sm:p-3 rounded-lg">
-              <AlertCircle className="w-4 h-4 sm:w-6 sm:h-6 text-red-400" />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Avg Hours</p>
-              <p className="text-2xl sm:text-3xl font-bold text-foreground mt-1 sm:mt-2">{stats.avgHours}h</p>
-            </div>
-            <div className="bg-primary/20 p-2 sm:p-3 rounded-lg">
-              <Timer className="w-4 h-4 sm:w-6 sm:h-6 text-primary" />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Overtime</p>
-              <p className="text-2xl sm:text-3xl font-bold text-green-400 mt-1 sm:mt-2">{stats.totalOvertime}h</p>
-            </div>
-            <div className="bg-green-500/20 p-2 sm:p-3 rounded-lg">
-              <TrendingUp className="w-4 h-4 sm:w-6 sm:h-6 text-green-400" />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="bg-card border-border p-4 sm:p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-muted-foreground text-xs sm:text-sm font-medium">Undertime</p>
-              <p className="text-2xl sm:text-3xl font-bold text-red-400 mt-1 sm:mt-2">{stats.totalUndertime}h</p>
-            </div>
-            <div className="bg-red-500/20 p-2 sm:p-3 rounded-lg">
-              <TrendingDown className="w-4 h-4 sm:w-6 sm:h-6 text-red-400" />
-            </div>
-          </div>
-        </Card>
+      {/* ── Stats Cards ── */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Avg Hours', value: `${stats.avgHours}h`, icon: Timer, color: 'text-primary', bg: 'bg-primary/20' },
+          { label: 'Overtime', value: `${stats.totalOvertime}h`, icon: TrendingUp, color: 'text-green-400', bg: 'bg-green-500/20' },
+          { label: 'Undertime', value: `${stats.totalUndertime}h`, icon: TrendingDown, color: 'text-red-400', bg: 'bg-red-500/20' },
+        ].map(s => {
+          const Icon = s.icon
+          return (
+            <Card key={s.label} className="bg-card border-border p-3 sm:p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-muted-foreground text-[10px] font-bold uppercase tracking-widest">{s.label}</p>
+                  <p className={`text-xl sm:text-2xl font-black mt-1 ${s.color}`}>{s.value}</p>
+                </div>
+                <div className={`${s.bg} p-2 rounded-lg shrink-0`}>
+                  <Icon className={`w-4 h-4 ${s.color}`} />
+                </div>
+              </div>
+            </Card>
+          )
+        })}
       </div>
 
-      {/* Filters */}
-      <Card className="bg-card border-border p-4">
-        <div className="flex flex-col lg:flex-row gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search employee..."
-                className="pl-10 bg-secondary border-border text-foreground placeholder:text-muted-foreground"
-                value={searchTerm}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
-            <Input
-              type="date"
-              value={attendanceDate}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAttendanceDate(e.target.value)}
-              className="bg-secondary border-border text-foreground w-full sm:w-40"
-            />
-            <div className="flex gap-3">
-              <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                <SelectTrigger className="flex-1 sm:w-40 bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Branch" />
-                </SelectTrigger>
-                <SelectContent className="bg-secondary border-border">
-                  <SelectItem value="all">All Branches</SelectItem>
-                  {branches.map(branch => (
-                    <SelectItem key={branch} value={branch}>{branch}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={selectedDept} onValueChange={setSelectedDept}>
-                <SelectTrigger className="flex-1 sm:w-40 bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Department" />
-                </SelectTrigger>
-                <SelectContent className="bg-secondary border-border">
-                  <SelectItem value="all">All Departments</SelectItem>
-                  {departments.map(dept => (
-                    <SelectItem key={dept} value={dept}>{dept}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                <SelectTrigger className="flex-1 sm:w-40 bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent className="bg-secondary border-border">
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="present">Present</SelectItem>
-                  <SelectItem value="late">Late</SelectItem>
-                  <SelectItem value="absent">Absent</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-      </Card>
+      {/* ── Branch Tab Bar ── */}
+      <div className="flex items-end gap-1 overflow-x-auto scrollbar-none">
+        {/* All Branches tab */}
+        <button
+          onClick={() => setActiveBranchId('all')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-t-xl text-sm font-bold transition-all duration-200 border-b-2 whitespace-nowrap ${activeBranchId === 'all'
+            ? 'bg-card border-b-transparent text-primary shadow-sm border border-border border-b-card'
+            : 'bg-secondary/40 border-b-transparent text-muted-foreground hover:text-foreground hover:bg-secondary'
+            }`}
+        >
+          <GitBranch className={`w-3.5 h-3.5 ${activeBranchId === 'all' ? 'text-primary' : 'text-muted-foreground'}`} />
+          All Branches
+        </button>
 
-      {/* Attendance Table */}
-      <Card className="bg-card border-border overflow-hidden rounded-2xl shadow-lg">
-        <div className="px-4 sm:px-6 py-4 border-b border-border bg-secondary/20 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-          <p className="text-sm text-muted-foreground">
-            Page {currentPage} of {totalPages} ({attendanceRecords.length} records on this page)
-          </p>
-          <Badge variant="outline" className="bg-primary/20 text-primary border-primary/30 w-fit text-xs">
-            {new Date(attendanceDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: '2-digit', year: 'numeric' })}
-          </Badge>
+        {branches.length === 0 ? (
+          <span className="px-4 py-2.5 text-xs text-muted-foreground italic">Loading branches...</span>
+        ) : (
+          branches.map(branch => {
+            const isActive = activeBranchId === branch.id
+            return (
+              <button
+                key={branch.id}
+                onClick={() => setActiveBranchId(branch.id)}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-t-xl text-sm font-bold transition-all duration-200 border-b-2 whitespace-nowrap ${isActive
+                  ? 'bg-card border-b-transparent text-primary shadow-sm border border-border border-b-card'
+                  : 'bg-secondary/40 border-b-transparent text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  }`}
+              >
+                <MapPin className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                {branch.name}
+              </button>
+            )
+          })
+        )}
+      </div>
+
+      {/* ── Main Card ── */}
+      <Card className="bg-card border-border rounded-2xl shadow-md overflow-hidden rounded-tl-none">
+
+        {/* Card header with inline mini-stats */}
+        <div className="px-6 py-4 border-b border-border bg-secondary/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+              {activeBranchId === 'all'
+                ? <GitBranch className="w-4 h-4 text-primary" />
+                : <Building2 className="w-4 h-4 text-primary" />}
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-foreground leading-tight">
+                {activeBranchId === 'all' ? 'All Branches' : activeBranch?.name}
+              </h3>
+              {activeBranch?.address && (
+                <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                  <MapPin className="w-3 h-3" />{activeBranch.address}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="text-center">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">On Time</p>
+              <p className="text-xl font-black text-foreground">{stats.onTime}</p>
+            </div>
+            <div className="w-px h-8 bg-border" />
+            <div className="text-center">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Late</p>
+              <p className="text-xl font-black text-yellow-400">{stats.totalLate}</p>
+            </div>
+            <div className="w-px h-8 bg-border" />
+            <div className="text-center">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Absent</p>
+              <p className="text-xl font-black text-red-400">{stats.totalAbsent}</p>
+            </div>
+            <div className="w-px h-8 bg-border" />
+            <div className="text-center">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Total</p>
+              <p className="text-xl font-black text-foreground">{stats.total}</p>
+            </div>
+          </div>
         </div>
+
+        {/* Filters row */}
+        <div className="px-4 py-3 border-b border-border bg-secondary/10 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="relative flex-1 max-w-xs w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search employee..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="pl-10 bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Select value={selectedDeptId} onValueChange={setSelectedDeptId}>
+              <SelectTrigger className="w-40 bg-secondary border-border text-foreground text-sm">
+                <SelectValue placeholder="Department" />
+              </SelectTrigger>
+              <SelectContent className="bg-secondary border-border">
+                <SelectItem value="all">All Departments</SelectItem>
+                {departments.map(d => (
+                  <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+              <SelectTrigger className="w-36 bg-secondary border-border text-foreground text-sm">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent className="bg-secondary border-border">
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="present">Present</SelectItem>
+                <SelectItem value="late">Late</SelectItem>
+                <SelectItem value="absent">Absent</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead className="sticky top-0 z-10">
               <tr className="border-b border-border bg-secondary/50 backdrop-blur-sm">
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Employee</th>
+                <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Branch</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Department</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Check In</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden sm:table-cell">Check Out</th>
+                <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden md:table-cell">Shift</th>
+                <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden md:table-cell">Late</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Hours</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden md:table-cell">OT</th>
                 <th className="px-4 sm:px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider hidden md:table-cell">UT</th>
@@ -449,15 +581,31 @@ export default function AttendancePage() {
             <tbody className="divide-y divide-border">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-muted-foreground">Loading attendance data...</td>
+                  <td colSpan={11} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                      <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      <span className="text-sm">Loading attendance data...</span>
+                    </div>
+                  </td>
                 </tr>
-              ) : paginatedRecords.length === 0 ? (
+              ) : records.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-muted-foreground">No records found.</td>
+                  <td colSpan={11} className="px-6 py-14 text-center">
+                    <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                      <Fingerprint className="w-10 h-10 text-muted-foreground/30" />
+                      <div>
+                        <p className="text-sm font-medium">No biometric records found</p>
+                        <p className="text-xs mt-0.5">
+                          No attendance for <strong>{activeBranchId === 'all' ? 'any branch' : activeBranch?.name}</strong> on this date.
+                        </p>
+                      </div>
+                    </div>
+                  </td>
                 </tr>
               ) : (
-                paginatedRecords.map((record, index) => (
-                  <tr
+                records
+                  .slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
+                  .map((record, index) => (<tr
                     key={record.id}
                     className={`hover:bg-primary/5 transition-colors ${index % 2 === 0 ? 'bg-transparent' : 'bg-secondary/10'}`}
                   >
@@ -472,82 +620,117 @@ export default function AttendancePage() {
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 sm:px-6 py-4 text-xs text-muted-foreground hidden sm:table-cell">{record.branchName}</td>
                     <td className="px-4 sm:px-6 py-4 hidden sm:table-cell">
                       <Badge variant="outline" className="bg-secondary/50 text-foreground border-border text-xs">
                         {record.department}
                       </Badge>
                     </td>
-                    <td className="px-4 sm:px-6 py-4 text-sm text-foreground hidden sm:table-cell">{record.checkIn}</td>
-                    <td className="px-4 sm:px-6 py-4 text-sm text-foreground hidden sm:table-cell">{record.checkOut}</td>
-                    <td className="px-4 sm:px-6 py-4 text-sm font-mono text-foreground">{record.hours > 0 ? record.hours.toFixed(2) : '-'}</td>
+                    <td className="px-4 sm:px-6 py-4 text-sm font-mono text-emerald-400 hidden sm:table-cell">{record.checkIn}</td>
+                    <td className="px-4 sm:px-6 py-4 text-sm font-mono text-foreground hidden sm:table-cell">{record.checkOut}</td>
                     <td className="px-4 sm:px-6 py-4 hidden md:table-cell">
-                      <span className={`text-sm font-medium ${record.overtime > 0 ? 'text-green-400' : 'text-muted-foreground'}`}>
-                        {record.overtime > 0 ? `+${record.overtime.toFixed(2)}` : '-'}
+                      {record.shiftCode ? (
+                        <Badge
+                          variant="outline"
+                          className={record.isNightShift
+                            ? 'bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs font-bold'
+                            : 'bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs font-bold'}
+                        >
+                          {record.shiftCode}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">No shift</span>
+                      )}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 hidden md:table-cell">
+                      {record.lateMinutes && record.lateMinutes > 0 ? (
+                        <span className="text-xs font-bold text-yellow-500 bg-yellow-500/10 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          {formatLate(record.lateMinutes)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 text-sm font-mono text-foreground">
+                      {fmtHours(record.totalHours)}
+                    </td>
+                    <td className="px-4 sm:px-6 py-4 hidden md:table-cell">
+                      <span className={`text-sm font-medium ${record.overtimeMinutes > 0 ? 'text-green-400' : 'text-muted-foreground'}`}>
+                        {record.overtimeMinutes > 0 ? `+${fmtMins(record.overtimeMinutes)}` : '—'}
                       </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4 hidden md:table-cell">
-                      <span className={`text-sm font-medium ${record.undertime > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>
-                        {record.undertime > 0 ? `-${record.undertime.toFixed(2)}` : '-'}
+                      <span className={`text-sm font-medium ${record.undertimeMinutes > 0 ? 'text-red-400' : 'text-muted-foreground'}`}>
+                        {record.undertimeMinutes > 0 ? `-${fmtMins(record.undertimeMinutes)}` : '—'}
                       </span>
                     </td>
                     <td className="px-4 sm:px-6 py-4">
-                      <Badge variant="outline" className={
-                        record.status === 'present' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                          record.status === 'absent' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
-                            record.status === 'late' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
-                              'bg-secondary/50 text-muted-foreground border-border'
-                      }>
-                        {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
-                      </Badge>
+                      {record.isAnomaly ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-700 border border-orange-200 whitespace-nowrap">
+                          <AlertCircle className="w-3 h-3" />
+                          Anomaly
+                        </span>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className={
+                            record.status === 'present'
+                              ? 'bg-green-500/20 text-green-400 border-green-500/30'
+                              : record.status === 'late'
+                                ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+                                : record.status === 'absent'
+                                  ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                                  : 'bg-secondary/50 text-muted-foreground border-border'
+                          }
+                        >
+                          {record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                        </Badge>
+                      )}
                     </td>
                   </tr>
-                )))}
+                  ))
+              )}
             </tbody>
           </table>
         </div>
 
         {/* Pagination */}
-        <div className="px-4 sm:px-6 py-4 bg-secondary/20 border-t border-border flex items-center justify-between">
-          <span className="text-xs sm:text-sm text-muted-foreground">
-            Page {currentPage} of {totalPages}
-          </span>
-          <div className="flex items-center gap-1 sm:gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-              disabled={currentPage === 1}
-              className="h-8 px-2 sm:px-3 border-border text-foreground hover:bg-secondary disabled:opacity-50"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              <span className="hidden sm:inline ml-1">Previous</span>
-            </Button>
-            <div className="hidden sm:flex gap-1">
+        {totalPages > 1 && (
+          <div className="px-4 sm:px-6 py-4 bg-secondary/20 border-t border-border flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              Page {currentPage} of {totalPages}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline" size="sm"
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="h-8 px-2 border-border text-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
               {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(page => (
                 <Button
                   key={page}
-                  variant={currentPage === page ? "default" : "outline"}
+                  variant={currentPage === page ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => setCurrentPage(page)}
-                  className={`h-8 w-8 p-0 ${currentPage === page ? 'bg-primary text-white' : 'border-border text-foreground hover:bg-secondary'}`}
+                  className={`h-8 w-8 p-0 hidden sm:flex ${currentPage === page ? 'bg-primary text-white' : 'border-border text-foreground hover:bg-secondary'}`}
                 >
                   {page}
                 </Button>
               ))}
+              <Button
+                variant="outline" size="sm"
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                disabled={currentPage >= totalPages}
+                className="h-8 px-2 border-border text-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
             </div>
-            <span className="sm:hidden text-xs text-muted-foreground px-2">{currentPage}/{totalPages}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-              disabled={currentPage >= totalPages}
-              className="h-8 px-2 sm:px-3 border-border text-foreground hover:bg-secondary disabled:opacity-50"
-            >
-              <span className="hidden sm:inline mr-1">Next</span>
-              <ChevronRight className="w-4 h-4" />
-            </Button>
           </div>
-        </div>
+        )}
       </Card>
     </div>
   )

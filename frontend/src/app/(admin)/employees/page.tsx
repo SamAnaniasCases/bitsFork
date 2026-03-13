@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
-import { Search, Plus, Edit2, ChevronLeft, ChevronRight, Upload, AlertTriangle, AlertCircle, X as XIcon } from 'lucide-react'
+import { Search, Plus, Edit2, ChevronLeft, ChevronRight, Upload, AlertTriangle, AlertCircle, X as XIcon, Fingerprint, CheckCircle2, WifiOff, Timer, Loader2 } from 'lucide-react'
 import { departmentsApi, branchesApi } from '@/lib/api'
 import type { Department, Branch } from '@/lib/api'
 
@@ -29,13 +29,54 @@ type Employee = {
   contactNumber: string | null
   hireDate: string | null
   employmentStatus: 'ACTIVE' | 'INACTIVE' | 'TERMINATED'
+  shiftId?: number | null
+  Shift?: { id: number; name: string; shiftCode: string; startTime: string; endTime: string } | null
   createdAt: string
+}
+
+type ShiftOption = {
+  id: number
+  shiftCode: string
+  name: string
+  startTime: string
+  endTime: string
+}
+
+type Toast = {
+  id: number
+  type: 'success' | 'warning' | 'error'
+  title: string
+  message: string
+}
+
+function formatTime(t: string) {
+  if (!t) return '';
+  const [h] = t.split(':');
+  const hour = parseInt(h);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const display = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return `${display}:${t.split(':')[1]} ${suffix}`;
+}
+
+function formatPhoneNumber(value: string | null) {
+  if (!value) return '';
+  const digits = value.replace(/\D/g, '').slice(0, 11);
+  if (digits.length <= 4) return digits;
+  if (digits.length <= 7) return `${digits.slice(0, 4)} ${digits.slice(4)}`;
+  return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
 }
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [toasts, setToasts] = useState<Toast[]>([])
+
+  const showToast = (type: Toast['type'], title: string, message: string) => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, type, title, message }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000)
+  }
   const [selectedDept, setSelectedDept] = useState<string>('all')
   const [selectedBranch, setSelectedBranch] = useState<string>('all')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -51,6 +92,47 @@ export default function EmployeesPage() {
   const [confirmDeactivate, setConfirmDeactivate] = useState<Employee | null>(null)
   const [isDeactivating, setIsDeactivating] = useState(false)
 
+  // Fingerprint enrollment state: { [employeeId]: 'idle' | 'loading' | 'success' | 'error' }
+  const [enrollStatus, setEnrollStatus] = useState<Record<number, 'idle' | 'loading' | 'success' | 'error'>>({})
+  const [enrollMsg, setEnrollMsg] = useState<Record<number, string>>({})
+
+  // Scan Now modal
+  const [scanModal, setScanModal] = useState<{ open: boolean; employeeName: string; countdown: number }>({
+    open: false,
+    employeeName: '',
+    countdown: 60,
+  })
+
+  const handleEnrollFingerprint = async (employeeId: number) => {
+    setEnrollStatus(prev => ({ ...prev, [employeeId]: 'loading' }))
+    setEnrollMsg(prev => ({ ...prev, [employeeId]: '' }))
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`/api/employees/${employeeId}/enroll-fingerprint`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (data.success) {
+        setEnrollStatus(prev => ({ ...prev, [employeeId]: 'success' }))
+        setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Enrollment started on device' }))
+        // Find the employee name and show the Scan Now modal
+        const emp = employees.find(e => e.id === employeeId)
+        const empName = emp ? `${emp.firstName} ${emp.lastName}` : 'Employee'
+        setScanModal({ open: true, employeeName: empName, countdown: 60 })
+      } else {
+        setEnrollStatus(prev => ({ ...prev, [employeeId]: 'error' }))
+        setEnrollMsg(prev => ({ ...prev, [employeeId]: data.message || 'Device offline or unreachable' }))
+      }
+    } catch {
+      setEnrollStatus(prev => ({ ...prev, [employeeId]: 'error' }))
+      setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Could not reach device' }))
+    } finally {
+      // Reset back to idle after 4 seconds
+      setTimeout(() => setEnrollStatus(prev => ({ ...prev, [employeeId]: 'idle' })), 4000)
+    }
+  }
+
   const [newEmployee, setNewEmployee] = useState({
     firstName: '',
     lastName: '',
@@ -59,13 +141,28 @@ export default function EmployeesPage() {
     branch: '',
     email: '',
     hireDate: '',
+    shiftId: '',
   })
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
+  const [isRegistering, setIsRegistering] = useState(false)
 
   const [currentPage, setCurrentPage] = useState(1)
   const rowsPerPage = 10
 
   const [departments, setDepartments] = useState<Department[]>([])
   const [branches, setBranches] = useState<Branch[]>([])
+  const [shifts, setShifts] = useState<ShiftOption[]>([])
+
+  const fetchShifts = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch('/api/shifts', { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (data.success) setShifts(data.shifts.filter((s: ShiftOption) => s))
+    } catch (error) {
+      console.error('Error fetching shifts:', error)
+    }
+  }
 
   const fetchBranches = async () => {
     try {
@@ -109,12 +206,25 @@ export default function EmployeesPage() {
     fetchEmployees()
     fetchBranches()
     fetchDepartments()
+    fetchShifts()
   }, [])
+
+  // Countdown timer for Scan Now modal
+  useEffect(() => {
+    if (!scanModal.open) return
+    if (scanModal.countdown <= 0) {
+      setScanModal(prev => ({ ...prev, open: false }))
+      return
+    }
+    const timer = setTimeout(() => {
+      setScanModal(prev => ({ ...prev, countdown: prev.countdown - 1 }))
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [scanModal.open, scanModal.countdown])
 
   const filteredEmployees = employees.filter(emp => {
     const fullName = `${emp.firstName} ${emp.lastName}`.toLowerCase()
-    const matchesSearch = fullName.includes(searchTerm.toLowerCase()) ||
-      (emp.contactNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesSearch = fullName.includes(searchTerm.toLowerCase()) || (emp.contactNumber || '').toLowerCase().includes(searchTerm.toLowerCase())
     // Resolve effective department name from relation or string field
     const empDept = emp.Department?.name || emp.department || ''
     const matchesDept = selectedDept === 'all' || empDept === selectedDept
@@ -129,33 +239,60 @@ export default function EmployeesPage() {
   )
 
   const handleAddEmployee = async () => {
-    if (newEmployee.firstName && newEmployee.lastName && newEmployee.department && newEmployee.branch) {
-      try {
-        const res = await fetch('/api/employees', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            firstName: newEmployee.firstName,
-            lastName: newEmployee.lastName,
-            contactNumber: newEmployee.contactNumber || undefined,
-            department: newEmployee.department,
-            branch: newEmployee.branch,
-            email: newEmployee.email || undefined,
-            hireDate: newEmployee.hireDate || undefined,
-          })
+    // Validate required fields
+    const errors: Record<string, string> = {}
+    if (!newEmployee.firstName.trim()) errors.firstName = 'First name is required'
+    if (!newEmployee.lastName.trim()) errors.lastName = 'Last name is required'
+    if (!newEmployee.contactNumber.trim()) errors.contactNumber = 'Contact number is required'
+    else if (newEmployee.contactNumber.replace(/\D/g, '').length !== 11) errors.contactNumber = 'Must be exactly 11 digits'
+    if (newEmployee.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmployee.email.trim())) errors.email = 'Enter a valid email address'
+    if (!newEmployee.department) errors.department = 'Department is required'
+    if (!newEmployee.branch) errors.branch = 'Branch is required'
+    if (Object.keys(errors).length > 0) { setFormErrors(errors); return }
+    setFormErrors({})
+    setIsRegistering(true)
+
+    try {
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          firstName: newEmployee.firstName,
+          lastName: newEmployee.lastName,
+          contactNumber: newEmployee.contactNumber || undefined,
+          department: newEmployee.department,
+          branch: newEmployee.branch,
+          email: newEmployee.email || undefined,
+          hireDate: newEmployee.hireDate || undefined,
+          shiftId: newEmployee.shiftId ? parseInt(newEmployee.shiftId) : undefined,
         })
-        const data = await res.json()
-        if (data.success) {
-          await fetchEmployees()
-          setNewEmployee({ firstName: '', lastName: '', contactNumber: '', department: '', branch: '', email: '', hireDate: '' })
-          setIsAddOpen(false)
+      })
+      const data = await res.json()
+      if (data.success) {
+        await fetchEmployees()
+        setNewEmployee({ firstName: '', lastName: '', contactNumber: '', department: '', branch: '', email: '', hireDate: '', shiftId: '' })
+        setFormErrors({})
+        setIsAddOpen(false)
+        // Show toast based on device sync result
+        const name = `${data.employee?.firstName || ''} ${data.employee?.lastName || ''}`.trim()
+        if (data.deviceSync?.success === false) {
+          // Explicit failure (device was tried synchronously and failed)
+          showToast('warning', 'Registered — Device Offline',
+            `${name} was saved but couldn't sync to the device. Use the 🔵 fingerprint button when the device is back online.`)
         } else {
-          alert('Failed to add employee: ' + (data.message || 'Unknown error'))
+          // success === true (synced immediately) OR success === null (background sync running)
+          showToast('success', 'Employee Registered',
+            `${name} has been saved. Device sync is running in the background — click the 🔵 fingerprint button on their row when ready to scan.`)
         }
-      } catch (error) {
-        console.error('Error adding employee:', error)
-        alert('Failed to add employee')
+      } else {
+        showToast('error', 'Registration Failed', data.message || 'Unknown error')
       }
+    } catch (error) {
+      console.error('Error adding employee:', error)
+      showToast('error', 'Registration Failed', 'Could not reach the server. Please try again.')
+    } finally {
+      setIsRegistering(false)
     }
   }
 
@@ -242,7 +379,10 @@ export default function EmployeesPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Contact Number</label>
-                  <input type="tel" value={editForm.contactNumber || ''} onChange={(e) => setEditForm({ ...editForm, contactNumber: e.target.value })} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-500/20" />
+                  <input type="tel" maxLength={13} value={editForm.contactNumber || ''} onChange={(e) => {
+                    const val = formatPhoneNumber(e.target.value)
+                    setEditForm({ ...editForm, contactNumber: val })
+                  }} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-500/20" />
                 </div>
               </div>
 
@@ -287,6 +427,21 @@ export default function EmployeesPage() {
                     </label>
                   </div>
                 </div>
+              </div>
+
+              {/* Work Shift */}
+              <div className="space-y-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Work Shift</label>
+                <select
+                  value={(editForm as any).shiftId || ''}
+                  onChange={(e) => setEditForm({ ...editForm, shiftId: e.target.value ? parseInt(e.target.value) : null } as any)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-500/20"
+                >
+                  <option value="">No shift assigned</option>
+                  {shifts.map(s => (
+                    <option key={s.id} value={s.id}>[{s.shiftCode}] {s.name} ({formatTime(s.startTime)} – {formatTime(s.endTime)})</option>
+                  ))}
+                </select>
               </div>
 
               <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl flex gap-3 shadow-sm shadow-amber-600/5">
@@ -342,6 +497,31 @@ export default function EmployeesPage() {
           </div>
         </div>
       )}
+
+      {/* Toast Notifications */}
+      <div className="fixed top-5 right-5 z-9999 flex flex-col gap-2 w-80 pointer-events-none">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`flex items-start gap-3 px-4 py-3 rounded-xl shadow-lg border pointer-events-auto animate-in slide-in-from-right-8 duration-300
+              ${t.type === 'success' ? 'bg-white border-green-200' : t.type === 'warning' ? 'bg-white border-amber-200' : 'bg-white border-red-200'}`}
+          >
+            <span className={`mt-0.5 text-lg shrink-0 ${t.type === 'success' ? 'text-green-500' : t.type === 'warning' ? 'text-amber-500' : 'text-red-500'}`}>
+              {t.type === 'success' ? '✅' : t.type === 'warning' ? '⚠️' : '❌'}
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className={`text-xs font-bold ${t.type === 'success' ? 'text-green-700' : t.type === 'warning' ? 'text-amber-700' : 'text-red-700'}`}>{t.title}</p>
+              <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{t.message}</p>
+            </div>
+            <button
+              onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+              className="text-slate-300 hover:text-slate-500 transition-colors shrink-0 mt-0.5"
+            >
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -446,19 +626,21 @@ export default function EmployeesPage() {
                     <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">First Name *</label>
                     <input
                       placeholder="First Name"
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.firstName ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all`}
                       value={newEmployee.firstName}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, firstName: e.target.value })}
+                      onChange={(e) => { setNewEmployee({ ...newEmployee, firstName: e.target.value }); setFormErrors(p => ({ ...p, firstName: '' })) }}
                     />
+                    {formErrors.firstName && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.firstName}</p>}
                   </div>
                   <div>
                     <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Last Name *</label>
                     <input
                       placeholder="Last Name"
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.lastName ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all`}
                       value={newEmployee.lastName}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, lastName: e.target.value })}
+                      onChange={(e) => { setNewEmployee({ ...newEmployee, lastName: e.target.value }); setFormErrors(p => ({ ...p, lastName: '' })) }}
                     />
+                    {formErrors.lastName && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.lastName}</p>}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -466,49 +648,58 @@ export default function EmployeesPage() {
                     <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Email Address</label>
                     <input
                       type="email"
-                      placeholder="Email Address"
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                      placeholder="example@email.com"
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.email ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all`}
                       value={newEmployee.email}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
+                      onChange={(e) => { setNewEmployee({ ...newEmployee, email: e.target.value }); setFormErrors(p => ({ ...p, email: '' })) }}
                     />
+                    {formErrors.email && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.email}</p>}
                   </div>
                   <div>
-                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Contact Number</label>
+                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Contact Number *</label>
                     <input
                       type="tel"
-                      placeholder="+63-912-345-6780"
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all"
+                      placeholder="09XX XXX XXXX"
+                      maxLength={13}
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.contactNumber ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 placeholder:text-slate-300 focus:ring-2 focus:ring-red-500/20 outline-none transition-all`}
                       value={newEmployee.contactNumber}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, contactNumber: e.target.value })}
+                      onChange={(e) => {
+                        const val = formatPhoneNumber(e.target.value)
+                        setNewEmployee({ ...newEmployee, contactNumber: val })
+                        setFormErrors(p => ({ ...p, contactNumber: '' }))
+                      }}
                     />
+                    {formErrors.contactNumber && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.contactNumber}</p>}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Department</label>
+                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Department *</label>
                     <select
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500/20 outline-none cursor-pointer transition-all appearance-none"
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.department ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500/20 outline-none cursor-pointer transition-all appearance-none`}
                       value={newEmployee.department}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}
+                      onChange={(e) => { setNewEmployee({ ...newEmployee, department: e.target.value }); setFormErrors(p => ({ ...p, department: '' })) }}
                     >
                       <option value="" disabled>e.g. Human Resources</option>
                       {departments.map(dept => (
                         <option key={dept.id} value={dept.name}>{dept.name}</option>
                       ))}
                     </select>
+                    {formErrors.department && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.department}</p>}
                   </div>
                   <div>
-                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Branch</label>
+                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Branch *</label>
                     <select
-                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500/20 outline-none cursor-pointer transition-all appearance-none"
+                      className={`mt-1.5 w-full px-3 py-2.5 rounded-xl border ${formErrors.branch ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-white'} text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500/20 outline-none cursor-pointer transition-all appearance-none`}
                       value={newEmployee.branch}
-                      onChange={(e) => setNewEmployee({ ...newEmployee, branch: e.target.value })}
+                      onChange={(e) => { setNewEmployee({ ...newEmployee, branch: e.target.value }); setFormErrors(p => ({ ...p, branch: '' })) }}
                     >
                       <option value="" disabled>e.g. Cebu City</option>
                       {branches.map(branch => (
                         <option key={branch.id} value={branch.name}>{branch.name}</option>
                       ))}
                     </select>
+                    {formErrors.branch && <p className="mt-1 text-[11px] text-red-500 font-semibold">{formErrors.branch}</p>}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -521,20 +712,39 @@ export default function EmployeesPage() {
                       onChange={(e) => setNewEmployee({ ...newEmployee, hireDate: e.target.value })}
                     />
                   </div>
+                  <div>
+                    <label className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Work Shift</label>
+                    <select
+                      className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 focus:ring-2 focus:ring-red-500/20 outline-none cursor-pointer transition-all appearance-none"
+                      value={newEmployee.shiftId}
+                      onChange={(e) => setNewEmployee({ ...newEmployee, shiftId: e.target.value })}
+                    >
+                      <option value="">No shift assigned</option>
+                      {shifts.map(s => (
+                        <option key={s.id} value={s.id}>[{s.shiftCode}] {s.name} ({formatTime(s.startTime)} – {formatTime(s.endTime)})</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
               <div className="flex items-center justify-center gap-6 px-6 py-4 border-t border-slate-100">
                 <button
                   className="text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors"
                   onClick={() => {
-                    setNewEmployee({ firstName: '', lastName: '', contactNumber: '', department: '', branch: '', email: '', hireDate: '' })
+                    setNewEmployee({ firstName: '', lastName: '', contactNumber: '', department: '', branch: '', email: '', hireDate: '', shiftId: '' })
+                    setFormErrors({})
                     setIsAddOpen(false)
                   }}
                 >
                   Discard
                 </button>
-                <button onClick={handleAddEmployee} className="px-8 py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-xl transition-colors">
-                  Register Employee
+                <button onClick={handleAddEmployee} disabled={isRegistering} className="px-8 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-sm font-bold rounded-xl transition-colors flex items-center gap-2">
+                  {isRegistering ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Registering...
+                    </>
+                  ) : 'Register Employee'}
                 </button>
               </div>
             </DialogContent>
@@ -591,6 +801,7 @@ export default function EmployeesPage() {
               <th className="px-6 py-4 w-16">#</th>
               <th className="px-6 py-4">Employee</th>
               <th className="px-6 py-4">Department</th>
+              <th className="px-6 py-4">Shift</th>
               <th className="px-6 py-4">Branch</th>
               <th className="px-6 py-4">Contact</th>
               <th className="px-6 py-4">Joined</th>
@@ -614,16 +825,26 @@ export default function EmployeesPage() {
                     <p className="font-bold text-slate-700">{employee.firstName} {employee.lastName}</p>
                     <p className="text-xs text-slate-400">{employee.email || '—'}</p>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">
+                  <td className="px-6 py-4 max-w-[120px]">
+                    <span className="text-xs font-medium text-slate-500 block truncate" title={employee.Department?.name || employee.department || undefined}>
                       {employee.Department?.name || employee.department || '—'}
                     </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    {employee.Shift ? (
+                      <div>
+                        <p className="text-xs font-bold text-slate-700 leading-tight">{employee.Shift.name}</p>
+                        <p className="text-[10px] font-medium text-slate-400 mt-0.5">{formatTime(employee.Shift.startTime)} – {formatTime(employee.Shift.endTime)}</p>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-300 font-bold">Unassigned</span>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-xs font-medium text-slate-500">{employee.branch || '—'}</span>
                   </td>
                   <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">{employee.contactNumber || '—'}</span>
+                    <span className="text-xs font-medium text-slate-500">{employee.contactNumber ? formatPhoneNumber(employee.contactNumber) : '—'}</span>
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-xs font-medium text-slate-500">
@@ -631,12 +852,58 @@ export default function EmployeesPage() {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <button
-                      onClick={() => handleEdit(employee)}
-                      className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all active:scale-90"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      {/* Edit */}
+                      <button
+                        onClick={() => handleEdit(employee)}
+                        className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all active:scale-90"
+                        title="Edit employee"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+
+                      {/* Fingerprint Enrollment */}
+                      {(() => {
+                        const status = enrollStatus[employee.id] || 'idle'
+                        const msg = enrollMsg[employee.id] || ''
+                        if (status === 'loading') {
+                          return (
+                            <button disabled className="p-2.5 rounded-xl bg-blue-50 text-blue-400 cursor-wait" title="Enrolling...">
+                              <Fingerprint className="w-4 h-4 animate-pulse" />
+                            </button>
+                          )
+                        }
+                        if (status === 'success') {
+                          return (
+                            <div className="flex items-center gap-1">
+                              <span className="p-2.5 rounded-xl bg-green-50 text-green-500">
+                                <CheckCircle2 className="w-4 h-4" />
+                              </span>
+                              <span className="text-[10px] text-green-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
+                            </div>
+                          )
+                        }
+                        if (status === 'error') {
+                          return (
+                            <div className="flex items-center gap-1">
+                              <span className="p-2.5 rounded-xl bg-amber-50 text-amber-500">
+                                <WifiOff className="w-4 h-4" />
+                              </span>
+                              <span className="text-[10px] text-amber-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
+                            </div>
+                          )
+                        }
+                        return (
+                          <button
+                            onClick={() => handleEnrollFingerprint(employee.id)}
+                            className="p-2.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all active:scale-90"
+                            title="Enroll Fingerprint"
+                          >
+                            <Fingerprint className="w-4 h-4" />
+                          </button>
+                        )
+                      })()}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -685,6 +952,81 @@ export default function EmployeesPage() {
           </div>
         </div>
       </div>
-    </div>
+
+      {/* ── Scan Now Modal ───────────────────────────────────────── */}
+      {scanModal.open && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+            {/* Header */}
+            <div className="bg-red-600 px-6 py-5 relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-red-500 to-red-700 opacity-60" />
+              <div className="relative flex items-center justify-between">
+                <div>
+                  <p className="text-red-100 text-[10px] uppercase font-black tracking-widest">Biometric Device</p>
+                  <h3 className="text-white font-black text-xl leading-tight mt-0.5">Scan Fingerprint Now</h3>
+                </div>
+                <button
+                  onClick={() => setScanModal(prev => ({ ...prev, open: false }))}
+                  className="text-white/70 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10"
+                >
+                  <XIcon className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-6 py-6 space-y-5">
+              {/* Fingerprint animation */}
+              <div className="flex flex-col items-center gap-3 py-2">
+                <div className="relative">
+                  <div className="w-20 h-20 rounded-full bg-red-50 border-2 border-red-100 flex items-center justify-center">
+                    <Fingerprint className="w-10 h-10 text-red-500 animate-pulse" />
+                  </div>
+                  {/* Pulsing ring */}
+                  <div className="absolute inset-0 rounded-full border-2 border-red-400 animate-ping opacity-30" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-blacktext-slate-700">{scanModal.employeeName}</p>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">is ready to enroll</p>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div className="space-y-2.5">
+                {([
+                  { step: '01', text: 'Go to the ZKTeco biometric device' },
+                  { step: '02', text: 'Look for this employee on the screen' },
+                  { step: '03', text: 'Press your finger firmly on the scanner' },
+                  { step: '04', text: 'Hold for 3 seconds until it beeps' },
+                ] as const).map(({ step, text }) => (
+                  <div key={step} className="flex items-center gap-3">
+                    <span className="shrink-0 w-7 h-7 rounded-lg bg-red-600 text-white text-[10px] font-black flex items-center justify-center">{step}</span>
+                    <p className="text-xs font-semibold text-slate-600">{text}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Countdown */}
+              <div className="bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3 flex items-center gap-3">
+                <Timer className="w-4 h-4 text-slate-400 shrink-0" />
+                <p className="text-xs text-slate-500 font-medium flex-1">Auto-closes in</p>
+                <span className={`text-sm font-black tabular-nums ${scanModal.countdown <= 10 ? 'text-red-500' : 'text-slate-700'
+                  }`}>{scanModal.countdown}s</span>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 pb-6">
+              <button
+                onClick={() => setScanModal(prev => ({ ...prev, open: false }))}
+                className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl text-sm font-black transition-all active:scale-95 shadow-lg shadow-slate-900/20"
+              >
+                Done — Fingerprint Scanned ✓
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div >
   )
 }
