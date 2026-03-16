@@ -103,33 +103,37 @@ export default function EmployeesPage() {
     countdown: 60,
   })
 
-  const handleEnrollFingerprint = async (employeeId: number) => {
+  const handleEnrollFingerprint = async (employeeId: number, fingerIndex: number = 5) => {
     setEnrollStatus(prev => ({ ...prev, [employeeId]: 'loading' }))
-    setEnrollMsg(prev => ({ ...prev, [employeeId]: '' }))
+    setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Connecting to device...' }))
+
     try {
       const res = await fetch(`/api/employees/${employeeId}/enroll-fingerprint`, {
         method: 'POST',
-        credentials: 'include'
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ fingerIndex }),
       })
+
       const data = await res.json()
+
       if (data.success) {
+        // Device confirmed in enrollment mode — now show the scan modal
         setEnrollStatus(prev => ({ ...prev, [employeeId]: 'success' }))
-        setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Enrollment started on device' }))
-        // Find the employee name and show the Scan Now modal
+        setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Device ready — scan finger now' }))
         const emp = employees.find(e => e.id === employeeId)
         const empName = emp ? `${emp.firstName} ${emp.lastName}` : 'Employee'
         setScanModal({ open: true, employeeName: empName, countdown: 60 })
       } else {
+        // Actual failure — keep error visible so admin can retry
         setEnrollStatus(prev => ({ ...prev, [employeeId]: 'error' }))
         setEnrollMsg(prev => ({ ...prev, [employeeId]: data.message || 'Device offline or unreachable' }))
       }
     } catch {
       setEnrollStatus(prev => ({ ...prev, [employeeId]: 'error' }))
-      setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Could not reach device' }))
-    } finally {
-      // Reset back to idle after 4 seconds
-      setTimeout(() => setEnrollStatus(prev => ({ ...prev, [employeeId]: 'idle' })), 4000)
+      setEnrollMsg(prev => ({ ...prev, [employeeId]: 'Could not reach the server' }))
     }
+    // No auto-reset to idle — error stays visible until admin retries or navigates away
   }
 
   const [newEmployee, setNewEmployee] = useState({

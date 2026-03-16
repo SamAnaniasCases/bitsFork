@@ -385,10 +385,12 @@ export const enrollEmployeeFingerprintController = async (req: Request, res: Res
             });
         }
 
-        // Optional finger index from request body (default: 0 = Right Thumb)
         const body = req.body || {};
         const { fingerIndex } = body;
-        const finger = fingerIndex !== undefined ? parseInt(fingerIndex) : 0;
+
+        // Default finger is 5 (Right Thumb) — ZKTeco standard primary enrollment finger.
+        // Previous default was 0 (Left Little Finger) which was incorrect.
+        const finger = fingerIndex !== undefined ? parseInt(fingerIndex) : 5;
 
         if (finger < 0 || finger > 9) {
             return res.status(400).json({
@@ -399,36 +401,33 @@ export const enrollEmployeeFingerprintController = async (req: Request, res: Res
 
         console.log(`[API] Starting fingerprint enrollment for employee ${employeeId} (finger: ${finger})...`);
 
-        // ── Respond immediately — enrollment happens in the background ─────────
-        // enrollEmployeeFingerprint connects to the device and awaits physical
-        // scans, which can take 25+ seconds. Holding the HTTP response open
-        // causes the Enroll button to appear frozen. We return 202 right away
-        // so the frontend can show feedback instantly.
-        res.status(202).json({
-            success: true,
-            message: 'Fingerprint enrollment started — please have the employee scan their finger on the device now.',
-        });
+        // Synchronously await the enrollment result.
+        // CMD_STARTENROLL on a local LAN completes in 3–8 seconds.
+        // The employee pressing their finger happens AFTER this returns —
+        // the device handles physical scanning independently once in enrollment mode.
+        // We must NOT use fire-and-forget here — the frontend needs to know
+        // whether the device accepted the command so it can show a retry on failure.
+        const result = await enrollEmployeeFingerprint(employeeId, finger);
 
-        // Fire-and-forget: run the actual enrollment after response is sent
-        setImmediate(async () => {
-            try {
-                const result = await enrollEmployeeFingerprint(employeeId, finger);
-                if (result.success) {
-                    console.log(`[API] (background) Enrollment success for employee ${employeeId}: ${result.message}`);
-                } else {
-                    console.error(`[API] (background) Enrollment failed for employee ${employeeId}: ${result.message}`);
-                }
-            } catch (enrollErr: any) {
-                console.error(`[API] (background) Enrollment error for employee ${employeeId}:`, enrollErr?.message || enrollErr);
-            }
-        });
+        if (result.success) {
+            return res.status(200).json({
+                success: true,
+                message: result.message,
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                message: result.message || 'Enrollment failed',
+                error: result.error,
+            });
+        }
 
     } catch (error: any) {
-        console.error('Error enrolling fingerprint:', error);
-        res.status(500).json({
+        console.error('[API] Enrollment error:', error);
+        return res.status(500).json({
             success: false,
-            message: 'Failed to enroll fingerprint',
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+            message: 'Failed to start enrollment',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
         });
     }
 };
