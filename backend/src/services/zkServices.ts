@@ -375,9 +375,12 @@ export const syncZkData = async (): Promise<SyncResult> => {
 
 export const addUserToDevice = async (zkId: number, name: string, role: string = 'USER', badgeNumber: string = ""): Promise<SyncResult> => {
     // addUserToDevice is triggered from the UI after employee creation.
-    // Use the standard device lock — acquireInteractiveDeviceLock() is reserved
-    // for fingerprint enrollment which must jump the queue ahead of cron syncs.
-    await acquireDeviceLock();
+    // Use the interactive priority lock so this jumps ahead of any already-queued
+    // cron syncs, eliminating the P4 race window between the setImmediate background
+    // call and the 10-second cron tick. Enrollment also uses this same lock, so all
+    // dashboard-initiated device writes share one VIP lane over background cron work.
+    await acquireInteractiveDeviceLock();
+
 
     try {
         console.log(`[ZK] Adding User with zkId=${zkId} (${name})...`);
@@ -811,8 +814,8 @@ export const syncEmployeesFromDevice = async (): Promise<SyncResult> => {
         const users = await zk.getUsers();
 
         console.log(`[ZK] Found ${users.length} users on device.`);
-        let newCount = 0;
         let updateCount = 0;
+        let skippedCount = 0;
 
         for (const user of users) {
             let zkId = parseInt(user.userId);
@@ -842,11 +845,13 @@ export const syncEmployeesFromDevice = async (): Promise<SyncResult> => {
                 updateCount++;
             } else {
                 // Unknown device user — do NOT auto-create in DB.
-                console.log(`[ZK] Skipping unknown device user zkId=${zkId} ("${user.name}") — not in database.`);
+                // Ghost users are handled by reconcileDeviceWithDB, not this function.
+                console.log(`[ZK] Skipping unknown zkId ${zkId} — not in database`);
+                skippedCount++;
             }
         }
 
-        return { success: true, message: `Scanned ${users.length}. Created ${newCount}, Found ${updateCount}.`, count: newCount };
+        return { success: true, message: `Scanned ${users.length}. Matched ${updateCount}, Skipped ${skippedCount} unknown.`, count: updateCount };
 
     } catch (error: any) {
         return { success: false, error: error.message };
