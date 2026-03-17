@@ -66,12 +66,14 @@ model Device {
   port          Int             @default(4370)
   location      String?
   isActive      Boolean         @default(true)
+  syncEnabled   Boolean         @default(true)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime
   AttendanceLog AttendanceLog[]
   EmployeeDeviceEnrollment EmployeeDeviceEnrollment[]
 
   @@index([isActive])
+  @@index([syncEnabled])
 }
 
 model Employee {
