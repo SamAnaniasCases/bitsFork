@@ -1,6 +1,5 @@
 import { prisma } from '../lib/prisma';
 import { ZKDriver } from '../lib/zk-driver';
-import { EnrollmentResult } from './fingerprintEnrollment.service';
 import { processAttendanceLogs } from './attendance.service';
 
 interface SyncResult {
@@ -201,7 +200,7 @@ export const syncZkData = async (): Promise<SyncResult> => {
                 const todayStartUTC = new Date(todayPHT.getTime() - 8 * 60 * 60 * 1000);
 
                 const logs = allLogs.filter((log: any) => {
-                    const logTime = new Date(log.timestamp);
+                    const logTime = new Date(log.recordTime);
                     return logTime >= todayStartUTC;
                 });
 
