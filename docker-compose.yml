@@ -47,6 +47,8 @@ services:
       # Change this if accessing via server IP (e.g. http://10.10.0.98:3010)
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       # FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
+
+      TZ: Asia/Manila
       # volumes:
       # - ./backend:/app
       # - /app/node_modules

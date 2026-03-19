@@ -14,11 +14,17 @@ export const syncAttendance = async (req: Request, res: Response) => {
         const result = await syncZkData();
         res.status(200).json(result);
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
         console.error('Sync failed:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to sync with device',
-            error: error.message
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };
@@ -37,11 +43,17 @@ export const addUser = async (req: Request, res: Response) => {
         res.status(200).json(result);
 
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
         console.error('Add Employee failed:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to add employee to device',
-            error: error.message
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };
@@ -88,11 +100,17 @@ export const getAttendance = async (req: Request, res: Response) => {
             }
         });
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
         console.error('Get Attendance Failed:', error);
         res.status(500).json({
             success: false,
-            message: error.message || 'Failed to fetch attendance records',
-            error: error.message
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };
@@ -110,9 +128,17 @@ export const getToday = async (req: Request, res: Response) => {
             data: records
         });
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
+        console.error('Get Today Failed:', error);
         res.status(500).json({
             success: false,
-            error: error.message
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };
@@ -146,9 +172,17 @@ export const getEmployeeHistory = async (req: Request, res: Response) => {
             data: records
         });
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
+        console.error('Get Employee History Failed:', error);
         res.status(500).json({
             success: false,
-            error: error.message
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };
@@ -192,10 +226,17 @@ export const updateAttendance = async (req: Request, res: Response) => {
             reason: reason || null
         });
     } catch (error: any) {
+        if (error?.code === 'P2002') {
+            res.status(409).json({
+                success: false,
+                message: 'Attendance record already exists for this employee today.'
+            });
+            return;
+        }
         console.error('Update Attendance Failed:', error);
         res.status(500).json({
             success: false,
-            message: error.message || 'Failed to update attendance record'
+            message: 'An unexpected error occurred. Please try again.'
         });
     }
 };

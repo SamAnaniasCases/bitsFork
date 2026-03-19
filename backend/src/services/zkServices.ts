@@ -332,7 +332,9 @@ export const syncZkData = async (): Promise<SyncResult> => {
                 // This prevents physical clock drift on the hardware. 
                 // The device expects the time in its local timezone (PHT UTC+8), so we send it raw 'new Date()'.
                 try {
-                    await zk.setTime(new Date());
+                    const nowUTC = new Date();
+                    const phtTime = new Date(nowUTC.getTime() + 8 * 60 * 60 * 1000);
+                    await zk.setTime(phtTime);
                     console.log(`[ZK] Enforced Centralized Server Time on "${dbDevice.name}"`);
                 } catch (timeErr) {
                     console.warn(`[ZK] setTime failed on "${dbDevice.name}" - continuing anyway: ${zkErrMsg(timeErr)}`);
@@ -1182,4 +1184,47 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
         try { await zk.disconnect(); } catch { /* ignore */ }
         releaseDeviceLock();
     }
+};
+
+/**
+ * Sync the clock of ALL active devices to the server's PHT time.
+ * Called by the cron job every hour — no attendance data is touched.
+ */
+export const syncAllDeviceClocks = async (): Promise<void> => {
+    const activeDevices = await prisma.device.findMany({
+        where: { isActive: true, syncEnabled: true }
+    });
+
+    if (activeDevices.length === 0) {
+        console.log('[ClockSync] No active devices found.');
+        return;
+    }
+
+    console.log(`[ClockSync] Syncing time on ${activeDevices.length} device(s)...`);
+
+    for (const device of activeDevices) {
+        // Use non-blocking lock — skip this device if already busy with attendance sync or enrollment
+        if (!tryAcquireDeviceLock()) {
+            console.warn(`[ClockSync] Skipping "${device.name}" — device busy.`);
+            continue;
+        }
+        try {
+            const zk = getDriver(device.ip, device.port || 4370);
+            await zk.connect();
+            try {
+                const nowUTC = new Date();
+                const phtTime = new Date(nowUTC.getTime() + 8 * 60 * 60 * 1000);
+                await zk.setTime(phtTime);
+                console.log(`[ClockSync] ✓ "${device.name}" (${device.ip}) — time set to PHT`);
+            } finally {
+                await zk.disconnect();
+            }
+        } catch (err: any) {
+            console.warn(`[ClockSync] ✗ "${device.name}" (${device.ip}) — failed: ${err.message}`);
+        } finally {
+            releaseDeviceLock();
+        }
+    }
+
+    console.log('[ClockSync] Done.');
 };

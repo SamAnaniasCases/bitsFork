@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { syncZkData } from '../services/zkServices';
+import { syncZkData, syncAllDeviceClocks } from '../services/zkServices';
 import { autoCloseIncompleteAttendance, autoCheckoutEmployees } from '../services/attendance.service';
 
 /**
@@ -46,7 +46,19 @@ export const startCronJobs = () => {
         }
     });
 
+    // Job 4: Sync all ZK device clocks to server PHT time every hour
+    // SAFE — only calls setTime(), never touches attendance or employee data.
+    cron.schedule('0 * * * *', async () => {
+        console.log('[CronJob] Running hourly device clock sync...');
+        try {
+            await syncAllDeviceClocks();
+        } catch (error) {
+            console.error('[CronJob] Clock sync error:', error);
+        }
+    });
+
     console.log('[CronJobs] ✓ Periodic sync scheduled (every 30 seconds, skips when device is busy)');
     console.log('[CronJobs] ✓ Midnight cleanup scheduled (00:00 daily)');
     console.log('[CronJobs] ✓ Auto-checkout scheduled (23:59 daily)');
+    console.log('[CronJobs] ✓ Hourly device clock sync scheduled (top of every hour)');
 };

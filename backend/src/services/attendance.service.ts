@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 /**
  * Attendance Service - Strategy C (Grace Period Toggle)
@@ -90,15 +91,24 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                 const isLate = checkInPHT.getUTCHours() > 8 ||
                     (checkInPHT.getUTCHours() === 8 && checkInPHT.getUTCMinutes() > 0);
 
-                await prisma.attendance.create({
-                    data: {
-                        employeeId: log.employeeId,
-                        date: dateOnly,
-                        checkInTime: log.timestamp,
-                        status: isLate ? 'late' : 'present'
+                try {
+                    await prisma.attendance.create({
+                        data: {
+                            employeeId: log.employeeId,
+                            date: dateOnly,
+                            checkInTime: log.timestamp,
+                            status: isLate ? 'late' : 'present'
+                        }
+                    });
+                    created++;
+                } catch (err: any) {
+                    if (err instanceof PrismaClientKnownRequestError && err.code === 'P2002') {
+                        // Duplicate record — silently skip, this is expected behavior
+                        console.debug(`[Attendance] Duplicate record skipped for employeeId=${log.employeeId} on ${dateOnly}`);
+                        continue;
                     }
-                });
-                created++;
+                    throw err; // Re-throw unexpected errors so the outer catch handles them
+                }
             } else {
                 // Record exists. Check if this is a valid check-out or just a duplicate/early scan
                 const checkInTime = new Date(existingAttendance.checkInTime);
