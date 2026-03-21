@@ -104,32 +104,39 @@ export class ZKDriver {
     }
 
     /**
-     * Set device time to align with the server clock
-     * @param date Date object to set on the device
+     * Set device time to align with the server clock.
+     * @param date Plain UTC Date object (e.g. new Date()). The PHT offset is
+     *             applied internally here — callers must NOT pre-shift the date.
      */
     async setTime(date: Date): Promise<void> {
         if (!this.zkInstance) throw new Error('Not connected');
         const { COMMANDS } = require('node-zklib/constants');
 
-        // ZKTeco encodes time in a specific integer format (seconds since year 2000)
-        // See node-zklib/utils.js makecommantime() for the format
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1; // 1-12
-        const day = date.getDate();
-        const hour = date.getHours();
-        const minute = date.getMinutes();
-        const second = date.getSeconds();
+        // Always use UTC accessors. The caller passes a plain UTC Date object.
+        // We add 8 hours here to convert to PHT — this is the ONLY place that
+        // offset is applied. Using getUTC* prevents the server's OS timezone
+        // (TZ=Asia/Manila) from accidentally adding another +8 on top.
+        const pht = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+
+        const year   = pht.getUTCFullYear();
+        const month  = pht.getUTCMonth() + 1;
+        const day    = pht.getUTCDate();
+        const hour   = pht.getUTCHours();
+        const minute = pht.getUTCMinutes();
+        const second = pht.getUTCSeconds();
 
         // Encode exactly as pyzk/zklib does:
         // ((year-2000)*12*31 + ((month-1)*31) + day-1) * (24*60*60) + (hour*60+minute)*60 + second
-        const timeInt = ((year - 2000) * 12 * 31 + (month - 1) * 31 + day - 1) * (24 * 60 * 60) + (hour * 60 + minute) * 60 + second;
+        const timeInt =
+            ((year - 2000) * 12 * 31 + (month - 1) * 31 + day - 1) * (24 * 60 * 60) +
+            (hour * 60 + minute) * 60 + second;
 
         const buf = Buffer.alloc(4);
         buf.writeUInt32LE(timeInt, 0);
 
         try {
             await this.zkInstance.executeCmd(COMMANDS.CMD_SET_TIME, buf);
-            await this.refreshData(); // Refresh to ensure changes take effect immediately
+            await this.refreshData();
         } catch (error: any) {
             throw new Error(`Failed to set device time: ${error.message || error}`);
         }

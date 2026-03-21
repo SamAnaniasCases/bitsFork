@@ -6,7 +6,9 @@ COPY package.json package-lock.json* ./
 COPY prisma ./prisma
 
 # Install Python3 for fingerprint enrollment scripts
-RUN apk add --no-cache python3 py3-pip
+RUN apk add --no-cache python3 py3-pip tzdata && \
+    cp /usr/share/zoneinfo/Asia/Manila /etc/localtime && \
+    echo "Asia/Manila" > /etc/timezone
 
 RUN npm install
 

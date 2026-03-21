@@ -333,8 +333,7 @@ export const syncZkData = async (): Promise<SyncResult> => {
                 // The device expects the time in its local timezone (PHT UTC+8), so we send it raw 'new Date()'.
                 try {
                     const nowUTC = new Date();
-                    const phtTime = new Date(nowUTC.getTime() + 8 * 60 * 60 * 1000);
-                    await zk.setTime(phtTime);
+                    await zk.setTime(nowUTC);
                     console.log(`[ZK] Enforced Centralized Server Time on "${dbDevice.name}"`);
                 } catch (timeErr) {
                     console.warn(`[ZK] setTime failed on "${dbDevice.name}" - continuing anyway: ${zkErrMsg(timeErr)}`);
@@ -502,7 +501,7 @@ export const addUserToDevice = async (zkId: number, name: string, role: string =
                 // the same visible userId — the uid-only check is blind to those.
                 const deviceUsers = await zk.getUsers();
                 // node-zklib does not export its user type, so 'any' is required here
-                const occupant       = deviceUsers.find((u: any) => u.uid === deviceUid);
+                const occupant = deviceUsers.find((u: any) => u.uid === deviceUid);
                 const visibleConflict = deviceUsers.find((u: any) =>
                     String(u.userId).trim() === visibleId.trim() && u.uid !== deviceUid
                 );
@@ -1213,8 +1212,7 @@ export const syncAllDeviceClocks = async (): Promise<void> => {
             await zk.connect();
             try {
                 const nowUTC = new Date();
-                const phtTime = new Date(nowUTC.getTime() + 8 * 60 * 60 * 1000);
-                await zk.setTime(phtTime);
+                await zk.setTime(nowUTC);
                 console.log(`[ClockSync] ✓ "${device.name}" (${device.ip}) — time set to PHT`);
             } finally {
                 await zk.disconnect();
