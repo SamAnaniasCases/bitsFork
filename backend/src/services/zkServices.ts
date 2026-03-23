@@ -312,6 +312,82 @@ async function connectWithRetry(zk: ZKDriver, maxRetries: number = 2): Promise<v
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Private helper: fire a background reconcile when a device reconnects.
+// Uses a DB-stored cooldown (lastReconciledAt) to prevent rapid flapping from
+// queuing multiple concurrent reconcile operations on the same device.
+// ─────────────────────────────────────────────────────────────────────────────
+const AUTO_RECONCILE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between auto-reconciles
+
+async function triggerAutoReconcile(deviceId: number, deviceName: string): Promise<void> {
+    try {
+        // Read the current lastReconciledAt from DB to enforce the cooldown.
+        // We cannot rely on an in-memory value here because the process may
+        // have restarted since the last reconcile, wiping any in-memory state.
+        const deviceRecord = await prisma.device.findUnique({
+            where: { id: deviceId },
+            select: { lastReconciledAt: true },
+        });
+
+        const lastReconciledAt = deviceRecord?.lastReconciledAt ?? null;
+        const now = new Date();
+
+        if (lastReconciledAt !== null) {
+            const msSinceLastReconcile = now.getTime() - lastReconciledAt.getTime();
+            if (msSinceLastReconcile < AUTO_RECONCILE_COOLDOWN_MS) {
+                const secondsRemaining = Math.ceil(
+                    (AUTO_RECONCILE_COOLDOWN_MS - msSinceLastReconcile) / 1000
+                );
+                console.log(
+                    `[ZK] Auto-reconcile for "${deviceName}" skipped — cooldown active ` +
+                    `(${secondsRemaining}s remaining).`
+                );
+                return;
+            }
+        }
+
+        console.log(`[ZK] Device "${deviceName}" reconnected — scheduling auto-reconcile...`);
+
+        // Update lastReconciledAt BEFORE firing the reconcile so that any
+        // subsequent reconnect events within the cooldown window are rejected
+        // even if the reconcile is still running.
+        await prisma.device.update({
+            where: { id: deviceId },
+            data: { lastReconciledAt: now },
+        });
+
+        // Fire the reconcile after the current event loop iteration completes.
+        // reconcileDeviceWithDB will acquireDeviceLock(deviceId), which queues
+        // behind the lock still held by syncSingleDevice. Once the sync finishes
+        // and releases its lock, the reconcile proceeds.
+        setImmediate(async () => {
+            try {
+                console.log(`[ZK] Auto-reconcile starting for "${deviceName}" (deviceId: ${deviceId})...`);
+                const report = await reconcileDeviceWithDB(deviceId, false, true);
+                console.log(
+                    `[ZK] Auto-reconcile complete for "${deviceName}". ` +
+                    `Pushed: ${report.pushed.length}, ` +
+                    `Deleted: ${report.deleted.length}, ` +
+                    `Needs enrollment: ${report.needsEnrollment.length}.`
+                );
+            } catch (reconcileErr: any) {
+                // Auto-reconcile failure is non-fatal. The admin can run a
+                // manual reconcile from the Devices page if needed.
+                console.error(
+                    `[ZK] Auto-reconcile failed for "${deviceName}": ${zkErrMsg(reconcileErr)}`
+                );
+            }
+        });
+
+    } catch (err: any) {
+        // Errors in triggerAutoReconcile itself must not propagate up and
+        // crash syncSingleDevice(). Log and swallow.
+        console.error(
+            `[ZK] triggerAutoReconcile error for "${deviceName}": ${zkErrMsg(err)}`
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Private helper: sync a single device (connect → getLogs → insert → disconnect).
 // Manages its own per-device lock. NOT exported — only called by syncZkData().
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,6 +431,12 @@ async function syncSingleDevice(dbDevice: {
 
     console.log(`[ZK] "${dbDevice.name}" watermark: ${watermark.toISOString()} (${deviceRecord?.lastSyncedAt ? 'from DB' : '48h fallback'})`);
 
+    // ── Reconnect detection ───────────────────────────────────────────────────
+    // Capture whether this device was marked offline BEFORE we attempt to connect.
+    // If isActive was false but we connect successfully this tick, that is a
+    // reconnect event and we should trigger a background reconcile.
+    const wasOfflineBefore: boolean = !dbDevice.isActive;
+
     const zk = getDriver(dbDevice.ip, dbDevice.port);
     try {
         console.log(`[ZK] Syncing device "${dbDevice.name}" at ${dbDevice.ip}:${dbDevice.port}...`);
@@ -373,6 +455,13 @@ async function syncSingleDevice(dbDevice: {
             where: { id: dbDevice.id },
             data: { isActive: true, updatedAt: new Date() }
         }).catch(() => { /* ignore */ });
+
+        // If this device was offline at the start of this tick but is now reachable,
+        // it just reconnected. Fire a background reconcile to push any employees that
+        // were created, updated, or deleted while the device was offline.
+        if (wasOfflineBefore) {
+            void triggerAutoReconcile(dbDevice.id, dbDevice.name);
+        }
 
                 // ENFORCE SOURCE OF TRUTH: Force the device's clock to match the Backend Server Time
                 // This prevents physical clock drift on the hardware. 
@@ -1125,8 +1214,13 @@ export interface ReconcileReport {
  *                  are made to the device. Use this for a safe preview before
  *                  committing to a potentially destructive operation in production.
  *                  Defaults to false.
+ * @param pushOnly  When true, ONLY push DB-only employees to the device —
+ *                  never delete ghost users. This is used by auto-reconcile
+ *                  on device reconnect to safely push missing employees without
+ *                  risking deletion of pre-existing data on shared or newly
+ *                  added devices. Defaults to false.
  */
-export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = false): Promise<ReconcileReport> => {
+export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = false, pushOnly: boolean = false): Promise<ReconcileReport> => {
     const report: ReconcileReport = {
         deviceId,
         deviceName: '',
@@ -1168,6 +1262,12 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
         const deviceByVisibleId = new Map(deviceUsers.map((u: any) => [u.userId, u]));
 
         // ── STEP A: Delete device-only ghost users ──────────────────────────
+        // Skipped entirely in pushOnly mode (auto-reconcile) to prevent
+        // accidental deletion of pre-existing users on shared or newly added
+        // devices. Ghost deletion is only performed during manual reconcile.
+        if (pushOnly) {
+            console.log(`[Reconcile] ⏩ Push-only mode — skipping ghost user deletion.`);
+        } else {
         for (const dUser of deviceUsers) {
             const uid = dUser.uid;
             const visibleId = dUser.userId;
@@ -1208,6 +1308,7 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
                 }
             }
         }
+        } // end if (!pushOnly)
 
         // ── STEP B: Push DB-only employees to device ────────────────────────
         for (const emp of dbEmployees) {
