@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useAttendanceStream, AttendanceStreamPayload } from '@/hooks/useAttendanceStream'
 import * as XLSX from 'xlsx'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -287,6 +288,25 @@ export default function BiometricPage() {
       setLoading(false)
     }
   }, [activeBranchId, selectedDate, selectedStatus, selectedDeptId, currentPage, debouncedSearch, branches])
+
+  // ── SSE: live attendance updates ─────────────────────────────────────
+  // Instead of manually merging SSE records (which would bypass absent-row
+  // generation and stats calculation), we simply re-fetch when a new record
+  // arrives for the currently viewed date. This is still far better than
+  // polling — we only re-fetch when something actually changes.
+  const handleStreamRecord = useCallback((payload: AttendanceStreamPayload) => {
+    const recordDateStr = new Date(payload.record.date)
+      .toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+    // Only re-fetch if the new record is for the date currently on screen
+    if (recordDateStr === selectedDate) {
+      fetchRecords()
+    }
+  }, [selectedDate, fetchRecords])
+
+  useAttendanceStream({
+    onRecord: handleStreamRecord,
+    onConnected: fetchRecords,
+  })
 
   useEffect(() => { fetchRecords() }, [fetchRecords])
 

@@ -6,6 +6,7 @@ import {
     getEmployeeAttendanceHistory
 } from '../services/attendance.service';
 import { prisma } from '../lib/prisma';
+import attendanceEmitter from '../lib/attendanceEmitter';
 
 
 export const syncAttendance = async (req: Request, res: Response) => {
@@ -239,4 +240,61 @@ export const updateAttendance = async (req: Request, res: Response) => {
             message: 'An unexpected error occurred. Please try again.'
         });
     }
+};
+
+/**
+ * GET /api/attendance/stream
+ *
+ * Server-Sent Events endpoint. Keeps the HTTP connection open and pushes
+ * new attendance records to the client as they are processed by syncZkData().
+ *
+ * WHY SSE instead of WebSockets: SSE is unidirectional (server → client),
+ * which is exactly what attendance monitoring needs. It works over plain HTTP,
+ * requires no additional library on either end.
+ *
+ * Authentication: The authenticate middleware is applied at the router level
+ * for all /api/attendance routes, so this endpoint requires a valid JWT
+ * cookie just like every other attendance route.
+ */
+export const streamAttendance = async (req: Request, res: Response): Promise<void> => {
+    // ── Set SSE headers ───────────────────────────────────────────────────
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // Disable Nginx buffering if a reverse proxy is ever added in front
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    // Flush headers immediately so the browser knows the stream has started.
+    res.flushHeaders();
+
+    // ── Send an initial "connected" event ─────────────────────────────────
+    res.write(`event: connected\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+
+    // ── Heartbeat ─────────────────────────────────────────────────────────
+    // SSE comments (lines starting with ':') keep the TCP connection alive
+    // through proxies that close idle connections after ~60s.
+    const heartbeatInterval = setInterval(() => {
+        res.write(': heartbeat\n\n');
+    }, 25_000);
+
+    // ── Event listener ────────────────────────────────────────────────────
+    // Listen for 'new-record' events from processAttendanceLogs() and push
+    // them to this client.
+    // The `any` on payload is unavoidable — the emitter carries untyped data
+    // across module boundaries and typing it would require a shared interface
+    // that adds coupling without safety (runtime JSON.parse is untyped anyway).
+    const onNewRecord = (payload: { type: string; record: any }) => {
+        res.write(`event: attendance\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    attendanceEmitter.on('new-record', onNewRecord);
+
+    // ── Cleanup on client disconnect ──────────────────────────────────────
+    req.on('close', () => {
+        clearInterval(heartbeatInterval);
+        attendanceEmitter.off('new-record', onNewRecord);
+        console.log(`[SSE] Client disconnected from attendance stream`);
+    });
+
+    console.log(`[SSE] Client connected to attendance stream`);
 };

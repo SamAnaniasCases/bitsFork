@@ -5,7 +5,8 @@ import {
     getAttendance,
     getToday,
     getEmployeeHistory,
-    updateAttendance
+    updateAttendance,
+    streamAttendance,
 } from '../controllers/attendance.controller';
 import { authenticate } from '../middleware/auth.middleware';
 import { adminOrHR } from '../middleware/role.middleware';
@@ -67,6 +68,20 @@ router.post('/sync', syncAttendance);
  *         description: Record added
  */
 router.post('/user', addUser);
+
+/**
+ * @swagger
+ * /api/attendance/stream:
+ *   get:
+ *     summary: Server-Sent Events stream for real-time attendance updates
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: SSE stream — connection stays open and pushes events
+ */
+router.get('/stream', streamAttendance);
 
 /**
  * @swagger

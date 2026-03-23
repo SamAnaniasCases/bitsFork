@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { useAttendanceStream, AttendanceStreamPayload } from '@/hooks/useAttendanceStream'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
@@ -261,6 +262,49 @@ const todayStr = phtStr(new Date())
       setRefreshing(false)
     }
   }, [router])
+
+  // ── SSE: real-time activity feed + KPI updates ────────────────────
+  // The full dashboard (chart, device status) still refreshes every 30s via
+  // setInterval. The activity feed and KPI counters update instantly on scan.
+  const handleStreamRecord = useCallback((payload: AttendanceStreamPayload) => {
+    const emp = payload.record.employee
+    const empName = emp
+      ? `${emp.firstName} ${emp.lastName}`.trim()
+      : 'Unknown'
+    const isLate = checkLate(payload.record.checkInTime)
+
+    const newEntry: LiveRecord = {
+      id: `stream-${payload.record.id}-${payload.type}`,
+      employee: empName,
+      department: emp?.Department?.name || emp?.department || '—',
+      branch: emp?.branch || '—',
+      eventType: payload.type === 'check-in' ? 'check-in' : 'check-out',
+      time: new Date(payload.record.checkInTime).toLocaleTimeString('en-US', {
+        timeZone: 'Asia/Manila',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      eventTs: new Date(payload.record.checkInTime).getTime(),
+      status: isLate ? 'late' : 'on-time',
+      shiftType: 'MORNING',
+    }
+
+    setActivity(prev => [newEntry, ...prev].slice(0, 12))
+
+    // Increment KPI counters immediately for check-ins
+    if (payload.type === 'check-in') {
+      if (isLate) {
+        setTotalLate(prev => prev + 1)
+      } else {
+        setTotalPresent(prev => prev + 1)
+      }
+      setTotalAbsent(prev => Math.max(0, prev - 1))
+    }
+  }, [checkLate])
+
+  useAttendanceStream({
+    onRecord: handleStreamRecord,
+  })
 
   useEffect(() => {
     // Verify auth via cookie instead of localStorage

@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import attendanceEmitter from '../lib/attendanceEmitter';
 
 /**
  * Attendance Service - Strategy C (Grace Period Toggle)
@@ -92,15 +93,34 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                     (checkInPHT.getUTCHours() === 8 && checkInPHT.getUTCMinutes() > 0);
 
                 try {
-                    await prisma.attendance.create({
+                    const createdRecord = await prisma.attendance.create({
                         data: {
                             employeeId: log.employeeId,
                             date: dateOnly,
                             checkInTime: log.timestamp,
                             status: isLate ? 'late' : 'present'
+                        },
+                        include: {
+                            employee: {
+                                select: {
+                                    id: true,
+                                    firstName: true,
+                                    lastName: true,
+                                    department: true,
+                                    Department: { select: { name: true } },
+                                    branch: true,
+                                }
+                            }
                         }
                     });
                     created++;
+
+                    // Notify SSE subscribers that a new check-in has been processed.
+                    // Fire-and-forget — if no subscribers exist the event is dropped.
+                    attendanceEmitter.emit('new-record', {
+                        type: 'check-in',
+                        record: createdRecord,
+                    });
                 } catch (err: any) {
                     if (err instanceof PrismaClientKnownRequestError && err.code === 'P2002') {
                         // Duplicate record — silently skip, this is expected behavior
@@ -126,25 +146,59 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                 // If existing check-out exists, only update if this new log is LATER (user left later)
                 if (existingAttendance.checkOutTime) {
                     if (log.timestamp > existingAttendance.checkOutTime) {
-                        await prisma.attendance.update({
+                        const updatedRecord = await prisma.attendance.update({
                             where: { id: existingAttendance.id },
                             data: {
                                 checkOutTime: log.timestamp,
                                 updatedAt: new Date()
+                            },
+                            include: {
+                                employee: {
+                                    select: {
+                                        id: true,
+                                        firstName: true,
+                                        lastName: true,
+                                        department: true,
+                                        Department: { select: { name: true } },
+                                        branch: true,
+                                    }
+                                }
                             }
                         });
                         updated++;
+
+                        attendanceEmitter.emit('new-record', {
+                            type: 'check-out',
+                            record: updatedRecord,
+                        });
                     }
                 } else {
                     // No check-out yet, and > 2 hours have passed -> Valid Check-Out
-                    await prisma.attendance.update({
+                    const updatedRecord2 = await prisma.attendance.update({
                         where: { id: existingAttendance.id },
                         data: {
                             checkOutTime: log.timestamp,
                             updatedAt: new Date()
+                        },
+                        include: {
+                            employee: {
+                                select: {
+                                    id: true,
+                                    firstName: true,
+                                    lastName: true,
+                                    department: true,
+                                    Department: { select: { name: true } },
+                                    branch: true,
+                                }
+                            }
                         }
                     });
                     updated++;
+
+                    attendanceEmitter.emit('new-record', {
+                        type: 'check-out',
+                        record: updatedRecord2,
+                    });
                 }
             }
         }
