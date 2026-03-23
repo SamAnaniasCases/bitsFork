@@ -198,7 +198,7 @@ export default function BiometricPage() {
           const shiftCode: string | null = log.shiftCode ?? emp.Shift?.shiftCode ?? null
           const isAnomaly: boolean = log.isAnomaly ?? false
 
-          const status = isAnomaly ? 'anomaly' : lateMinutes > 0 ? 'late' : (log.status || 'present')
+          const status = isAnomaly ? 'anomaly' : lateMinutes > 0 ? 'late' : undertimeMinutes > 0 ? 'undertime' : (log.status || 'present')
 
           return {
             id: log.id,
@@ -695,9 +695,11 @@ export default function BiometricPage() {
                               ? 'bg-green-500/20 text-green-400 border-green-500/30'
                               : record.status === 'late'
                                 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
-                                : record.status === 'absent'
-                                  ? 'bg-red-500/20 text-red-400 border-red-500/30'
-                                  : 'bg-secondary/50 text-muted-foreground border-border'
+                                : record.status === 'undertime'
+                                  ? 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+                                  : record.status === 'absent'
+                                    ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                                    : 'bg-secondary/50 text-muted-foreground border-border'
                           }
                         >
                           {record.status.charAt(0).toUpperCase() + record.status.slice(1)}

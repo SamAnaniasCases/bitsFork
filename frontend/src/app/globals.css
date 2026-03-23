@@ -122,4 +122,20 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* UI Consistency Fix - Apply pointer to all interactive elements globally */
+  button,
+  [role="button"],
+  [role="menuitem"],
+  input[type="submit"],
+  input[type="button"],
+  input[type="reset"] {
+    cursor: pointer !important;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"],
+  input:disabled {
+    cursor: not-allowed !important;
+  }
 }

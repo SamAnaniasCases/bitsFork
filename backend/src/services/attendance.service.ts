@@ -109,17 +109,26 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                                     department: true,
                                     Department: { select: { name: true } },
                                     branch: true,
+                                    Shift: true,
                                 }
                             }
                         }
                     });
                     created++;
 
+                    const shift = createdRecord.employee?.Shift ?? null;
+                    const metrics = calculateAttendanceMetrics(createdRecord, shift);
+
                     // Notify SSE subscribers that a new check-in has been processed.
                     // Fire-and-forget — if no subscribers exist the event is dropped.
                     attendanceEmitter.emit('new-record', {
                         type: 'check-in',
-                        record: createdRecord,
+                        record: {
+                            ...createdRecord,
+                            checkInTimePH: formatToPhilippineTime(createdRecord.checkInTime),
+                            checkOutTimePH: null,
+                            ...metrics,
+                        },
                     });
                 } catch (err: any) {
                     if (err instanceof PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -161,15 +170,24 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                                         department: true,
                                         Department: { select: { name: true } },
                                         branch: true,
+                                        Shift: true,
                                     }
                                 }
                             }
                         });
                         updated++;
 
+                        const shift = updatedRecord.employee?.Shift ?? null;
+                        const metrics = calculateAttendanceMetrics(updatedRecord, shift);
+
                         attendanceEmitter.emit('new-record', {
                             type: 'check-out',
-                            record: updatedRecord,
+                            record: {
+                                ...updatedRecord,
+                                checkInTimePH: formatToPhilippineTime(updatedRecord.checkInTime),
+                                checkOutTimePH: updatedRecord.checkOutTime ? formatToPhilippineTime(updatedRecord.checkOutTime) : null,
+                                ...metrics,
+                            },
                         });
                     }
                 } else {
@@ -189,15 +207,24 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                                     department: true,
                                     Department: { select: { name: true } },
                                     branch: true,
+                                    Shift: true,
                                 }
                             }
                         }
                     });
                     updated++;
 
+                    const shift2 = updatedRecord2.employee?.Shift ?? null;
+                    const metrics2 = calculateAttendanceMetrics(updatedRecord2, shift2);
+
                     attendanceEmitter.emit('new-record', {
                         type: 'check-out',
-                        record: updatedRecord2,
+                        record: {
+                            ...updatedRecord2,
+                            checkInTimePH: formatToPhilippineTime(updatedRecord2.checkInTime),
+                            checkOutTimePH: updatedRecord2.checkOutTime ? formatToPhilippineTime(updatedRecord2.checkOutTime) : null,
+                            ...metrics2,
+                        },
                     });
                 }
             }
@@ -412,7 +439,7 @@ export const getAttendanceRecords = async (filters: AttendanceFilters = {}, page
  * All times are stored as UTC where PHT midnight = UTC midnight offset by -8h
  * i.e. a stored timestamp of 2026-02-10T00:00:00Z represents 2026-02-10T08:00:00+08:00 PHT midnight workaround
  */
-const calculateAttendanceMetrics = (record: any, shift: any) => {
+function calculateAttendanceMetrics(record: any, shift: any) {
     const shiftCode = shift?.shiftCode ?? null;
 
     if (!shift || !record.checkInTime) {
@@ -524,7 +551,7 @@ const calculateAttendanceMetrics = (record: any, shift: any) => {
 /**
  * Helper: Convert UTC date to Philippine Time string
  */
-const formatToPhilippineTime = (utcDate: Date): string => {
+function formatToPhilippineTime(utcDate: Date): string {
     // Just use toLocaleString with timeZone option. 
     // The input utcDate is already a valid Date object (UTC).
     return utcDate.toLocaleString('en-US', {

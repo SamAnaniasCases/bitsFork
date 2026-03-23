@@ -33,7 +33,7 @@ interface LiveRecord {
   eventType: 'check-in' | 'check-out'
   time: string
   eventTs: number   // raw ms for sorting
-  status: 'on-time' | 'late' | 'absent'
+  status: 'on-time' | 'late' | 'absent' | 'undertime'
   shiftType: string
 }
 interface WeekDay {
@@ -105,15 +105,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
 
   /** Returns true if checkInTime (ISO string) is past 08:00 AM PHT */
-  const checkLate = (checkInISO: string | null): boolean => {
-    if (!checkInISO) return false
-    const d = new Date(checkInISO)
-    // Format HH:MM in PHT and extract parts
-    const [h, m] = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false
-    }).format(d).split(':').map(Number)
-    return h > 8 || (h === 8 && m > 0)
-  }
+  // No more checkLate: we now use the backend's accurately calculated lateMinutes.
 
   const load = useCallback(async () => {
     try {
@@ -158,9 +150,9 @@ const todayStr = phtStr(new Date())
           return recDate === dateStr
         })
 
-        // Re-derive present/late from checkInTime (bypass stale DB status)
-        const late = dayAtts.filter(a => a.checkInTime && checkLate(a.checkInTime)).length
-        const present = dayAtts.filter(a => a.checkInTime && !checkLate(a.checkInTime)).length
+        // Re-derive present/late using the dynamically calculated lateMinutes
+        const late = dayAtts.filter(a => a.checkInTime && a.lateMinutes > 0).length
+        const present = dayAtts.filter(a => a.checkInTime && (!a.lateMinutes || a.lateMinutes === 0)).length
 
         // Only count absents for days that have already happened (not future days)
         const absent = dateStr <= todayPHTStr
@@ -204,10 +196,9 @@ const todayStr = phtStr(new Date())
 
       setBranchSummaries(summaries)
 
-      // ── KPI totals — recompute lateness from checkInTime (PHT) so stale
-      //    DB status fields on old records don't cause incorrect counts.
-      const todayLate = atts.filter(a => a.checkInTime && checkLate(a.checkInTime)).length
-      const todayPresent = atts.filter(a => a.checkInTime && !checkLate(a.checkInTime)).length
+      // ── KPI totals — accurately calculated using true shift metric
+      const todayLate = atts.filter(a => a.checkInTime && a.lateMinutes > 0).length
+      const todayPresent = atts.filter(a => a.checkInTime && (!a.lateMinutes || a.lateMinutes === 0)).length
       setTotalPresent(todayPresent)
       setTotalLate(todayLate)
       setTotalAbsent(Math.max(0, activeCount - todayPresent - todayLate))
@@ -219,7 +210,7 @@ const todayStr = phtStr(new Date())
         const empName = `${r.employee?.firstName || ''} ${r.employee?.lastName || ''}`.trim()
         const dept = r.employee?.Department?.name || r.employee?.department || '—'
         const branch = r.employee?.branch || '—'
-        const ciStatus: LiveRecord['status'] = r.status === 'absent' ? 'absent' : checkLate(r.checkInTime) ? 'late' : 'on-time'
+        const ciStatus: LiveRecord['status'] = r.status === 'absent' ? 'absent' : (r.lateMinutes > 0 ? 'late' : 'on-time')
 
         // Check-in event
         if (r.checkInTime) {
@@ -246,7 +237,7 @@ const todayStr = phtStr(new Date())
             eventType: 'check-out',
             time: new Date(r.checkOutTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
             eventTs: new Date(r.checkOutTime).getTime(),
-            status: ciStatus,  // keep the same on-time/late status from check-in
+            status: r.undertimeMinutes > 0 ? 'undertime' : 'on-time',
             shiftType: r.shiftType || 'MORNING',
           })
         }
@@ -271,27 +262,29 @@ const todayStr = phtStr(new Date())
     const empName = emp
       ? `${emp.firstName} ${emp.lastName}`.trim()
       : 'Unknown'
-    const isLate = checkLate(payload.record.checkInTime)
+    const isLate = payload.record.lateMinutes > 0
+    const isUndertime = payload.record.undertimeMinutes > 0
 
     const newEntry: LiveRecord = {
-      id: `stream-${payload.record.id}-${payload.type}`,
+      id: `stream-${payload.record.id}-${payload.type}-${payload.record.checkOutTime ?? 'in'}`,
       employee: empName,
       department: emp?.Department?.name || emp?.department || '—',
       branch: emp?.branch || '—',
       eventType: payload.type === 'check-in' ? 'check-in' : 'check-out',
-      time: new Date(payload.record.checkInTime).toLocaleTimeString('en-US', {
+      time: new Date(payload.type === 'check-in' ? payload.record.checkInTime : payload.record.checkOutTime!).toLocaleTimeString('en-US', {
         timeZone: 'Asia/Manila',
         hour: '2-digit',
         minute: '2-digit',
       }),
-      eventTs: new Date(payload.record.checkInTime).getTime(),
-      status: isLate ? 'late' : 'on-time',
+      eventTs: new Date(payload.type === 'check-in' ? payload.record.checkInTime : payload.record.checkOutTime!).getTime(),
+      status: payload.type === 'check-in' ? (isLate ? 'late' : 'on-time') : (isUndertime ? 'undertime' : 'on-time'),
       shiftType: 'MORNING',
     }
 
     setActivity(prev => [newEntry, ...prev].slice(0, 12))
 
     // Increment KPI counters immediately for check-ins
+    // We only update KPI on check-in to avoid double counting on check-out
     if (payload.type === 'check-in') {
       if (isLate) {
         setTotalLate(prev => prev + 1)
@@ -300,7 +293,7 @@ const todayStr = phtStr(new Date())
       }
       setTotalAbsent(prev => Math.max(0, prev - 1))
     }
-  }, [checkLate])
+  }, [])
 
   useAttendanceStream({
     onRecord: handleStreamRecord,
@@ -569,9 +562,11 @@ const todayStr = phtStr(new Date())
                           ? 'bg-emerald-50 text-emerald-700'
                           : a.status === 'late'
                             ? 'bg-amber-50 text-amber-700'
-                            : 'bg-rose-50 text-rose-700'
+                            : a.status === 'undertime'
+                              ? 'bg-orange-50 text-orange-700'
+                              : 'bg-rose-50 text-rose-700'
                           }`}>
-                          {a.status === 'on-time' ? 'On Time' : a.status === 'late' ? 'Late' : 'Absent'}
+                          {a.status === 'on-time' ? 'On Time' : a.status === 'late' ? 'Late' : a.status === 'undertime' ? 'Undertime' : 'Absent'}
                         </span>
                       </div>
 

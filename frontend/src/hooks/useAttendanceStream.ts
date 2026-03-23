@@ -11,6 +11,11 @@ export interface AttendanceStreamPayload {
         checkInTime: string
         checkOutTime: string | null
         status: string
+        lateMinutes: number
+        undertimeMinutes: number
+        overtimeMinutes: number
+        totalHours: number
+        isAnomaly: boolean
         employee: {
             id: number
             firstName: string
@@ -18,6 +23,7 @@ export interface AttendanceStreamPayload {
             department: string | null
             Department?: { name: string } | null
             branch: string | null
+            Shift?: any
         }
     }
 }

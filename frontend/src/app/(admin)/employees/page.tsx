@@ -1246,8 +1246,9 @@ export default function EmployeesPage() {
                   disabled={!selectedDeviceId}
                   onClick={() => {
                     if (!selectedDeviceId || !devicePickerModal.employeeId) return
+                    const empId = devicePickerModal.employeeId;
                     setDevicePickerModal({ open: false, employeeId: null, employeeName: '' })
-                    handleEnrollFingerprint(devicePickerModal.employeeId, selectedDeviceId)
+                    handleEnrollFingerprint(empId, selectedDeviceId)
                     setSelectedDeviceId(null)
                   }}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold shadow-lg shadow-red-600/25 transition-colors"
@@ -1259,6 +1260,30 @@ export default function EmployeesPage() {
           </div>
         </div>
       )}
+
+      {/* ── Enrollment Loading Full-Screen Modal ────────────────────────────── */}
+      {(() => {
+        const enrollingIdStr = Object.keys(enrollStatus).find(id => enrollStatus[Number(id)] === 'loading');
+        if (!enrollingIdStr) return null;
+        const msg = enrollMsg[Number(enrollingIdStr)] || 'Connecting to biometric device...';
+        return (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-3xl shadow-2xl p-8 flex flex-col items-center max-w-sm mx-4 text-center">
+              <div className="relative mb-6">
+                <div className="absolute inset-0 bg-blue-100 rounded-full animate-ping opacity-60"></div>
+                <div className="bg-blue-50 text-blue-600 p-5 rounded-full relative shadow-sm">
+                  <Loader2 className="w-10 h-10 animate-spin" />
+                </div>
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">Please Wait</h3>
+              <p className="text-sm font-medium text-slate-500">
+                {msg}
+              </p>
+            </div>
+          </div>
+        );
+      })()}
+      
     </div >
   )
 }
