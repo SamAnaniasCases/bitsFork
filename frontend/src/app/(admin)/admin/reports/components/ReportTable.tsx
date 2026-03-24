@@ -1,0 +1,217 @@
+import React from 'react';
+import { ChevronRight, ChevronLeft, AlertTriangle } from 'lucide-react';
+import { ReportRow } from '../types';
+import { formatHrsMins, formatShiftTime } from '../utils/formatters';
+
+interface ReportTableProps {
+  paginatedData: ReportRow[];
+  filteredDataLength: number;
+  loading: boolean;
+  currentPage: number;
+  totalPages: number;
+  setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
+  setSelectedEmployee: (emp: ReportRow) => void;
+}
+
+export const ReportTable: React.FC<ReportTableProps> = ({
+  paginatedData,
+  filteredDataLength,
+  loading,
+  currentPage,
+  totalPages,
+  setCurrentPage,
+  setSelectedEmployee,
+}) => {
+  // Generate windowed page numbers
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+    let end = start + maxVisible - 1;
+
+    if (end > totalPages) {
+      end = totalPages;
+      start = Math.max(1, end - maxVisible + 1);
+    }
+
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    return pages;
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-slate-100">
+        <h3 className="text-sm font-bold text-slate-700 uppercase tracking-widest">
+          Preview Records
+        </h3>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
+            <tr>
+              <th className="px-6 py-4">Employee</th>
+              <th className="px-6 py-4">Shift</th>
+              <th className="px-6 py-4 text-center">Present</th>
+              <th className="px-6 py-4 text-center">Late</th>
+              <th className="px-6 py-4 text-center">Overtime</th>
+              <th className="px-6 py-4 text-center">Undertime</th>
+              <th className="px-6 py-4 text-center">Hours Worked</th>
+              <th className="px-6 py-4 text-center"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td colSpan={8} className="px-6 py-12 text-center text-slate-400 font-bold text-xs">
+                  Loading report data...
+                </td>
+              </tr>
+            ) : paginatedData.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-6 py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">
+                  No records found
+                </td>
+              </tr>
+            ) : (
+              paginatedData.map((employee) => (
+                <tr
+                  key={employee.id}
+                  className="hover:bg-red-50/30 transition-colors duration-200"
+                >
+                  <td className="px-6 py-5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-800">
+                        {employee.name}
+                      </span>
+                      {employee.hasAnomaly && (
+                        <span title="This employee has anomalous check-in records">
+                          <AlertTriangle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-6 py-5">
+                    {employee.shift ? (
+                      <div>
+                        <p className="text-xs font-bold text-slate-700">
+                          {employee.shift.name}
+                        </p>
+                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                          {formatShiftTime(employee.shift.startTime)} –{' '}
+                          {formatShiftTime(employee.shift.endTime)}
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-300 font-bold italic">
+                        No shift
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-6 py-5 text-center">
+                    <span className="text-sm font-bold text-slate-700">
+                      {employee.present}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-center rounded-lg">
+                    {employee.late > 0 ? (
+                      <div className="flex flex-col items-center">
+                        <span className="text-sm font-bold text-yellow-600">
+                          {employee.late} days
+                        </span>
+                        <span className="text-[10px] font-medium text-yellow-600/70">
+                          {Math.floor(employee.lateMinutes / 60)}h {employee.lateMinutes % 60}m
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-sm font-bold text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-5 text-center">
+                    <span
+                      className={`text-sm font-bold ${
+                        employee.overtime > 0 ? 'text-blue-600' : 'text-slate-300'
+                      }`}
+                    >
+                      {employee.overtime > 0
+                        ? formatHrsMins(employee.overtime)
+                        : '—'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-center">
+                    <span
+                      className={`text-sm font-bold ${
+                        employee.undertime > 0 ? 'text-red-500' : 'text-slate-300'
+                      }`}
+                    >
+                      {employee.undertime > 0
+                        ? formatHrsMins(employee.undertime)
+                        : '—'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-center">
+                    <span className="text-sm font-bold font-mono text-slate-800">
+                      {employee.totalHours.toFixed(2)}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5">
+                    <button
+                      onClick={() => setSelectedEmployee(employee)}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-full transition-colors shadow-sm"
+                    >
+                      View History
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+        <span className="text-xs text-slate-400 font-bold">
+          Showing {paginatedData.length} of {filteredDataLength} records · Page{' '}
+          {currentPage} of {totalPages}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+            disabled={currentPage === 1}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500 hover:bg-white hover:border-slate-200 border border-transparent transition-colors disabled:opacity-30"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          
+          {getPageNumbers().map((page) => (
+            <button
+              key={page}
+              onClick={() => setCurrentPage(page)}
+              className={`h-8 w-8 rounded-lg text-xs font-bold transition-colors ${
+                currentPage === page
+                  ? 'bg-red-600 text-white'
+                  : 'text-slate-500 hover:bg-white hover:border-slate-200 border border-transparent'
+              }`}
+            >
+              {page}
+            </button>
+          ))}
+
+          <button
+            onClick={() =>
+              setCurrentPage((prev) => Math.min(prev + 1, totalPages))
+            }
+            disabled={currentPage === totalPages}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500 hover:bg-white hover:border-slate-200 border border-transparent transition-colors disabled:opacity-30"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
