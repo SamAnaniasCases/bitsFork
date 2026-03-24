@@ -1,10 +1,11 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { User, Menu, Settings, LogOut, ChevronDown } from 'lucide-react'
 import Image from 'next/image'
 import { useServerTime } from '@/hooks/useServerTime'
+import { useDeviceStream, DeviceStatusPayload, DeviceConnectedPayload } from '@/hooks/useDeviceStream'
 
 interface AdminTopbarProps {
   onMenuClick: () => void
@@ -19,15 +20,24 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
   const [userName, setUserName] = useState('')
   const [deviceOnline, setDeviceOnline] = useState<boolean | null>(null)
 
-  const checkDevice = async () => {
-    try {
-      const res = await fetch('/api/health/device', { credentials: 'include' })
-      const data = await res.json()
-      setDeviceOnline(data.online === true)
-    } catch {
-      setDeviceOnline(false)
-    }
-  }
+  // ── SSE: real-time device status ────────────────────────────────────────
+  // Replaces the previous 15-second polling interval with an SSE stream.
+  const handleDeviceConnected = useCallback((payload: DeviceConnectedPayload) => {
+    // On connect, the server sends the current status of all devices.
+    // If ANY device is online, show online. If all are offline, show offline.
+    const anyOnline = payload.devices.some(d => d.isActive)
+    setDeviceOnline(anyOnline)
+  }, [])
+
+  const handleDeviceStatus = useCallback((payload: DeviceStatusPayload) => {
+    // A single device changed state — update the aggregate indicator.
+    setDeviceOnline(payload.isActive)
+  }, [])
+
+  useDeviceStream({
+    onConnected: handleDeviceConnected,
+    onStatusChange: handleDeviceStatus,
+  })
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -43,12 +53,6 @@ export function AdminTopbar({ onMenuClick }: AdminTopbarProps) {
       }
     }
     fetchUser()
-  }, [])
-
-  useEffect(() => {
-    checkDevice()
-    const interval = setInterval(checkDevice, 15000)
-    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {

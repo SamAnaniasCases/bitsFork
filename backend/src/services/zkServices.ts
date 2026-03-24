@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { ZKDriver } from '../lib/zk-driver';
 import { processAttendanceLogs } from './attendance.service';
+import deviceEmitter from '../lib/deviceEmitter';
 
 interface SyncResult {
     success: boolean;
@@ -489,7 +490,9 @@ async function syncSingleDevice(dbDevice: {
     const zk = getDriver(dbDevice.ip, dbDevice.port);
     try {
         console.log(`[ZK] Syncing device "${dbDevice.name}" at ${dbDevice.ip}:${dbDevice.port}...`);
-        await connectWithRetry(zk);
+        // Single attempt — the 30s cron IS the retry loop. No need to waste
+        // 5+ seconds retrying within a tick when the next tick is 30s away.
+        await connectWithRetry(zk, 0);
 
         // getInfo() uses UDP — non-fatal if it fails (device still works via TCP)
         try {
@@ -510,6 +513,14 @@ async function syncSingleDevice(dbDevice: {
         // were created, updated, or deleted while the device was offline.
         if (wasOfflineBefore) {
             void triggerAutoReconcile(dbDevice.id, dbDevice.name);
+
+            // Notify SSE subscribers that this device just came back online.
+            deviceEmitter.emit('status-change', {
+                id: dbDevice.id,
+                name: dbDevice.name,
+                ip: dbDevice.ip,
+                isActive: true,
+            });
         }
 
                 // ENFORCE SOURCE OF TRUTH: Force the device's clock to match the Backend Server Time
@@ -634,11 +645,26 @@ async function syncSingleDevice(dbDevice: {
 
     } catch (deviceErr: any) {
         console.error(`[ZK] Error syncing "${dbDevice.name}" (${dbDevice.ip}): ${zkErrMsg(deviceErr)}`);
+
+        // Only emit when the device was previously online — avoids redundant
+        // broadcasts for a device that is already known to be offline.
+        const transitionedToOffline = dbDevice.isActive;
+
         // Mark this specific device as OFFLINE
         await prisma.device.update({
             where: { id: dbDevice.id },
             data: { isActive: false, updatedAt: new Date() }
         }).catch(() => { /* ignore */ });
+
+        if (transitionedToOffline) {
+            deviceEmitter.emit('status-change', {
+                id: dbDevice.id,
+                name: dbDevice.name,
+                ip: dbDevice.ip,
+                isActive: false,
+            });
+        }
+
         return { deviceId: dbDevice.id, newLogs: 0, skipped: false, error: zkErrMsg(deviceErr) };
     } finally {
         try { await zk.disconnect(); } catch { /* ignore */ }
@@ -1008,6 +1034,16 @@ export const enrollEmployeeFingerprint = async (
         }
     }
 
+    // Guard: refuse enrollment immediately if the device is known to be offline.
+    // This avoids a 5-10 second wait for connectWithRetry to fail and gives
+    // the user instant feedback.
+    if (!dbDevice.isActive) {
+        return {
+            success: false,
+            message: `Device "${dbDevice.name}" is currently offline. Please wait for it to come back online before enrolling.`,
+        };
+    }
+
     const fullName = `${employee.firstName} ${employee.lastName}`;
     const visibleId = employee.zkId.toString();
     // UID = zkId — deterministic 1-to-1 mapping (matches addUserToDevice strategy)
@@ -1022,7 +1058,9 @@ export const enrollEmployeeFingerprint = async (
 
     try {
         console.log(`[Enrollment] Connecting to "${dbDevice.name}" (${dbDevice.ip}:${dbDevice.port})...`);
-        await connectWithRetry(zk, 2);
+        // 1 retry for enrollment — user is actively waiting, so one quick
+        // retry is acceptable but 3 attempts is too slow for an interactive flow.
+        await connectWithRetry(zk, 1);
 
         // 3. Ensure user exists on this specific device
         const deviceUsers = await zk.getUsers();
@@ -1308,7 +1346,12 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
         const deviceUsers = await zk.getUsers();
         console.log(`[Reconcile] Device has ${deviceUsers.length} users. DB has ${dbEmployees.length} active employees.`);
 
-        const deviceByVisibleId = new Map(deviceUsers.map((u: any) => [u.userId, u]));
+        // CRITICAL: Trim userId strings — ZKTeco devices often store userId with
+        // trailing whitespace (e.g., "2 " instead of "2"). Without trimming,
+        // every Map.has() lookup fails and ALL users get re-pushed destructively.
+        const deviceByVisibleId = new Map(deviceUsers.map((u: any) => [String(u.userId).trim(), u]));
+        // Also build a UID-based lookup for secondary matching
+        const deviceByUid = new Map(deviceUsers.map((u: any) => [u.uid as number, u]));
 
         // ── STEP A: Delete device-only ghost users ──────────────────────────
         // Skipped entirely in pushOnly mode (auto-reconcile) to prevent
@@ -1319,7 +1362,7 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
         } else {
         for (const dUser of deviceUsers) {
             const uid = dUser.uid;
-            const visibleId = dUser.userId;
+            const visibleId = String(dUser.userId).trim();
 
             // Skip protected UIDs
             if (PROTECTED_DEVICE_UIDS.includes(uid)) {
@@ -1334,7 +1377,7 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
                 continue;
             }
 
-            // Check if this user maps to an active DB employee
+            // Check if this user maps to an active DB employee (trimmed comparison)
             if (!dbByZkId.has(visibleId)) {
                 // Ghost user — not in DB.
                 if (dryRun) {
@@ -1368,8 +1411,13 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
 
             if (PROTECTED_DEVICE_UIDS.includes(zkId)) continue;
 
-            if (!deviceByVisibleId.has(visibleId)) {
-                // Employee in DB but not on device.
+            // Check by trimmed visibleId first, then by UID as fallback.
+            // This prevents false "not on device" when the string has trailing spaces
+            // or the user was written with a different visibleId format.
+            const existsOnDevice = deviceByVisibleId.has(visibleId) || deviceByUid.has(zkId);
+
+            if (!existsOnDevice) {
+                // Employee in DB but genuinely not on device.
                 if (dryRun) {
                     // Dry-run: record what would be pushed, touch nothing.
                     report.pushed.push({ zkId, name: fullName });
@@ -1377,10 +1425,11 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
                     console.log(`[Reconcile] 🔍 Would push "${fullName}" (zkId=${zkId}) to device.`);
                 } else {
                     // Live run: write the employee to the device.
+                    // SAFE: Use setUser() only — NEVER deleteUser() or clearUserFingerprints()
+                    // before pushing. This preserves any existing fingerprint data if the
+                    // user somehow exists at a different UID or the lookup missed them.
                     console.log(`[Reconcile] ➕ Pushing "${fullName}" (zkId=${zkId}) to device...`);
                     try {
-                        try { await zk.deleteUser(zkId); } catch { /* slot may be empty */ }
-                        await zk.clearUserFingerprints(zkId);
                         await zk.setUser(zkId, fullName, "", deviceRole, 0, visibleId);
                         report.pushed.push({ zkId, name: fullName });
                         // Newly pushed user has no fingerprints yet
@@ -1394,7 +1443,7 @@ export const reconcileDeviceWithDB = async (deviceId: number, dryRun: boolean = 
                 }
             } else {
                 // User exists on device — check finger count
-                const dUser = deviceByVisibleId.get(visibleId);
+                const dUser = deviceByVisibleId.get(visibleId) ?? deviceByUid.get(zkId);
                 try {
                     const fingerCount = await zk.getFingerCount(dUser.uid);
                     if (fingerCount === 0) {

@@ -29,6 +29,13 @@ type AttendanceRecord = {
   checkInTime: string
   checkOutTime: string | null
   status: string
+  // Backend-enriched fields from calculateAttendanceMetrics()
+  totalHours?: number
+  lateMinutes?: number
+  overtimeMinutes?: number
+  undertimeMinutes?: number
+  isAnomaly?: boolean
+  shiftCode?: string | null
   employee: {
     id: number
     firstName: string
@@ -59,47 +66,10 @@ type ReportRow = {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Returns late minutes vs shift threshold (negative = early, positive = late) */
-const getLateByMins = (checkIn: Date, shift: EmployeeShift | null, recordDate: Date): number => {
-  let thresholdMs: number;
-  if (shift) {
-    const [h, m] = shift.startTime.split(':').map(Number);
-    const graceMins = shift.graceMinutes ?? 0;
-    const dateMs = recordDate.getTime() + 8 * 60 * 60 * 1000;
-    const shiftStartMs = dateMs + (h * 60 + m) * 60 * 1000 - 8 * 60 * 60 * 1000;
-    thresholdMs = shiftStartMs + graceMins * 60 * 1000;
-  } else {
-    const checkInPHT = new Date(checkIn.getTime() + 8 * 60 * 60 * 1000);
-    thresholdMs = new Date(checkInPHT).setUTCHours(8, 0, 0, 0) - 8 * 60 * 60 * 1000;
-  }
-  return Math.round((checkIn.getTime() - thresholdMs) / 60000);
-};
-
-/**
- * Determine the status label for a single attendance record.
- * Returns 'anomaly' | 'late' | 'on-time'
- *
- * "Anomaly" = employee tapped in MORE THAN 4 hours away from their expected shift start
- * (either extremely early or extremely late — indicates they tapped on the wrong day/shift)
- */
-const getRecordStatus = (
-  checkIn: Date,
-  shift: EmployeeShift | null,
-  recordDate: Date,
-  dbStatus: string
-): 'anomaly' | 'late' | 'on-time' => {
-  const ANOMALY_THRESHOLD_MINS = 4 * 60; // 4 hours
-
-  if (shift) {
-    const [h, m] = shift.startTime.split(':').map(Number);
-    const dateMs = recordDate.getTime() + 8 * 60 * 60 * 1000;
-    const shiftStartMs = dateMs + (h * 60 + m) * 60 * 1000 - 8 * 60 * 60 * 1000;
-    const diffMins = Math.abs(Math.round((checkIn.getTime() - shiftStartMs) / 60000));
-    if (diffMins > ANOMALY_THRESHOLD_MINS) return 'anomaly';
-  }
-
-  const lateMins = getLateByMins(checkIn, shift, recordDate);
-  if (dbStatus === 'late' || lateMins > 0) return 'late';
+/** Derive a display status from backend-enriched record fields */
+const getRecordStatusFromBackend = (r: AttendanceRecord): 'anomaly' | 'late' | 'on-time' => {
+  if (r.isAnomaly) return 'anomaly';
+  if ((r.lateMinutes ?? 0) > 0 || r.status === 'late') return 'late';
   return 'on-time';
 };
 
@@ -211,38 +181,23 @@ export default function ReportsPage() {
         });
       });
 
+      // Use backend-enriched values (totalHours, lateMinutes, overtimeMinutes, undertimeMinutes)
+      // These are calculated by calculateAttendanceMetrics() in attendance.service.ts
+      // and handle night shifts, half days, grace periods, and break deductions correctly.
       records.forEach((r) => {
         const row = rowMap.get(r.employeeId);
         if (!row) return;
         row.totalDays++;
-        const checkIn = new Date(r.checkInTime);
-        const recordDate = new Date(r.date);
-        const lateMins = getLateByMins(checkIn, row.shift, recordDate);
+
+        const lateMins = r.lateMinutes ?? 0;
         if (lateMins > 0) { row.late++; row.lateMinutes += lateMins; }
         else row.present++;
 
-        if (r.checkOutTime) {
-          const checkOut = new Date(r.checkOutTime);
-          const rawMins = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60);
-
-          // Shift-aware expected hours and break deduction
-          const breakMins = row.shift?.breakMinutes ?? 60;
-          const shiftMins = row.shift
-            ? (() => {
-                const [sh, sm] = row.shift.startTime.split(':').map(Number);
-                const [eh, em] = row.shift.endTime.split(':').map(Number);
-                return (eh * 60 + em) - (sh * 60 + sm);
-              })()
-            : 480;
-          const deductedBreak = rawMins >= (shiftMins / 2) ? breakMins : 0;
-          const workedMins = Math.max(0, rawMins - deductedBreak);
-          const hrs = workedMins / 60;
-          const expectedHrs = (shiftMins - breakMins) / 60;
-
-          row.totalHours += hrs;
-          if (hrs > expectedHrs) row.overtime += parseFloat((hrs - expectedHrs).toFixed(1));
-          else if (hrs < expectedHrs) row.undertime += parseFloat((expectedHrs - hrs).toFixed(1));
-        }
+        // Use backend-calculated totalHours (already break-deducted, shift-aware)
+        row.totalHours += r.totalHours ?? 0;
+        // Overtime and undertime in minutes from backend → accumulate as hours
+        row.overtime += (r.overtimeMinutes ?? 0) / 60;
+        row.undertime += (r.undertimeMinutes ?? 0) / 60;
       });
 
       setReportData(Array.from(rowMap.values()));
@@ -263,11 +218,7 @@ export default function ReportsPage() {
   /** Does this employee have at least one anomaly record? */
   const hasAnomalyRecords = (emp: ReportRow): boolean => {
     const records = getEmployeeRecords(emp.id);
-    return records.some(r => {
-      const checkIn = new Date(r.checkInTime);
-      const recordDate = new Date(r.date);
-      return getRecordStatus(checkIn, emp.shift, recordDate, r.status) === 'anomaly';
-    });
+    return records.some(r => r.isAnomaly === true);
   };
 
   const filteredData = reportData.filter(emp => {
@@ -337,10 +288,9 @@ export default function ReportsPage() {
     records.forEach(r => {
       const checkIn = new Date(r.checkInTime);
       const checkOut = r.checkOutTime ? new Date(r.checkOutTime) : null;
-      const hoursWorked = checkOut ? ((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60)).toFixed(2) : '—';
-      const recordDate = new Date(r.date);
-      const statusLabel = getRecordStatus(checkIn, emp.shift, recordDate, r.status);
-      const lateMins = getLateByMins(checkIn, emp.shift, recordDate);
+      const hoursWorked = r.totalHours ? r.totalHours.toFixed(2) : (checkOut ? ((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60)).toFixed(2) : '—');
+      const statusLabel = getRecordStatusFromBackend(r);
+      const lateMins = r.lateMinutes ?? 0;
       allRows.push([
         fmtFullDate(new Date(r.checkInTime)),
         DAYS[new Date(r.checkInTime).getDay()],
@@ -415,7 +365,7 @@ export default function ReportsPage() {
             </div>
 
             {/* Anomaly warning banner — shown if any records are flagged */}
-            {empRecords.some(r => getRecordStatus(new Date(r.checkInTime), selectedEmployee.shift, new Date(r.date), r.status) === 'anomaly') && (
+            {empRecords.some(r => r.isAnomaly === true) && (
               <div className="flex items-center gap-3 px-5 py-2.5 bg-orange-50 border-b border-orange-100">
                 <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0" />
                 <p className="text-xs font-bold text-orange-700">
@@ -474,10 +424,9 @@ export default function ReportsPage() {
                     empRecords.map((record) => {
                       const checkIn = new Date(record.checkInTime);
                       const checkOut = record.checkOutTime ? new Date(record.checkOutTime) : null;
-                      const hoursWorked = checkOut ? ((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60)) : 0;
-                      const recordDate = new Date(record.date);
-                      const statusType = getRecordStatus(checkIn, selectedEmployee.shift, recordDate, record.status);
-                      const lateMins = getLateByMins(checkIn, selectedEmployee.shift, recordDate);
+                      const hoursWorked = record.totalHours ?? (checkOut ? ((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60)) : 0);
+                      const statusType = getRecordStatusFromBackend(record);
+                      const lateMins = record.lateMinutes ?? 0;
 
                       // ② Row highlight for anomaly
                       const rowBg = statusType === 'anomaly'

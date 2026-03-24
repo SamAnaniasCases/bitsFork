@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { ZKDriver } from '../lib/zk-driver';
 import { forceReleaseLock } from '../services/zkServices';
+import deviceEmitter from '../lib/deviceEmitter';
 
 /** Unwrap node-zklib's ZKError: { err: Error, ip, command } → readable string */
 function zkErrMsg(err: any): string {
@@ -165,10 +166,22 @@ export const testDeviceConnection = async (req: Request, res: Response) => {
         }
 
         // Update isActive based on test result
+        const wasActive = device.isActive;
         await prisma.device.update({
             where: { id },
             data: { isActive: connected, updatedAt: new Date() }
         });
+
+        // Emit a status change only when the state actually changed so open tabs
+        // do not re-render unnecessarily on repeated test calls with the same result.
+        if (wasActive !== connected) {
+            deviceEmitter.emit('status-change', {
+                id: device.id,
+                name: device.name,
+                ip: device.ip,
+                isActive: connected,
+            });
+        }
 
         if (connected) {
             console.log(`[Devices] ✓ "${device.name}" is ONLINE. Users: ${userCount}`);
@@ -194,10 +207,27 @@ export const testDeviceConnection = async (req: Request, res: Response) => {
         console.error(`[Devices] Connection test failed for device ${id}: ${msg}`);
 
         // Mark device as offline
+        // The `device` variable from the try block is out of scope here,
+        // so re-query to check the previous isActive state for SSE emission.
+        const failedDevice = await prisma.device.findUnique({
+            where: { id },
+            select: { isActive: true, name: true, ip: true },
+        }).catch(() => null);
+
+        const wasActiveOnFail = failedDevice?.isActive ?? false;
         await prisma.device.update({
             where: { id },
             data: { isActive: false, updatedAt: new Date() }
         }).catch(() => { /* ignore if device was deleted */ });
+
+        if (wasActiveOnFail) {
+            deviceEmitter.emit('status-change', {
+                id,
+                name: failedDevice?.name ?? 'Unknown',
+                ip: failedDevice?.ip ?? '',
+                isActive: false,
+            });
+        }
 
         // Check if it's a network/timeout error (ZKError wraps it in .err)
         const innerErr = error?.err;
@@ -279,5 +309,71 @@ export const toggleDevice = async (req: Request, res: Response) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+/**
+ * GET /api/devices/stream
+ *
+ * Server-Sent Events endpoint. Keeps the HTTP connection open and pushes
+ * device status changes (online/offline) to the client as they are
+ * detected by the 30-second sync cron job or manual test actions.
+ *
+ * WHY SSE here: The topbar currently polls /api/health/device every 15
+ * seconds from every open tab. With 14 interns this is 56 requests/minute
+ * of pure overhead. SSE pushes status changes only when they actually
+ * occur — typically a few times per day when the device loses power or
+ * the network blips. Zero traffic when the device is stable.
+ *
+ * Authentication: The authenticate middleware applied at the router level
+ * covers this route — valid JWT cookie required, same as all device routes.
+ */
+export const streamDeviceStatus = async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // Disable Nginx buffering if a reverse proxy is ever added in front
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    // Send initial connected event with current device states so the
+    // client has accurate status immediately without a separate HTTP request.
+    try {
+        const devices = await prisma.device.findMany({
+            select: { id: true, name: true, ip: true, isActive: true, syncEnabled: true },
+            orderBy: { id: 'asc' },
+        });
+        res.write(`event: connected\ndata: ${JSON.stringify({ devices })}\n\n`);
+    } catch {
+        // If the DB query fails, send an empty connected event so the
+        // client at least knows the stream is open and waits for changes.
+        res.write(`event: connected\ndata: ${JSON.stringify({ devices: [] })}\n\n`);
+    }
+
+    // 25-second heartbeat keeps the connection alive through proxies
+    // that close idle TCP connections after ~60 seconds.
+    const heartbeatInterval = setInterval(() => {
+        res.write(': heartbeat\n\n');
+    }, 25_000);
+
+    const onStatusChange = (payload: {
+        id: number;
+        name: string;
+        ip: string;
+        isActive: boolean;
+    }) => {
+        res.write(`event: device-status\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    deviceEmitter.on('status-change', onStatusChange);
+
+    req.on('close', () => {
+        clearInterval(heartbeatInterval);
+        deviceEmitter.off('status-change', onStatusChange);
+        console.log(`[SSE] Client disconnected from device stream`);
+    });
+
+    console.log(`[SSE] Client connected to device stream`);
+};
+
 
 

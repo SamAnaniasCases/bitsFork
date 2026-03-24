@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAttendanceStream, AttendanceStreamPayload } from '@/hooks/useAttendanceStream'
+import { useDeviceStream, DeviceStatusPayload, DeviceConnectedPayload } from '@/hooks/useDeviceStream'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
@@ -15,7 +16,7 @@ import {
 
 /* ── Types ─────────────────────────────────────── */
 interface Branch { id: number; name: string; address?: string }
-interface Device { id: number; name: string; ip: string; port: number; location?: string; isActive: boolean }
+interface Device { id: number; name: string; ip: string; port: number; location?: string; isActive: boolean; syncEnabled: boolean }
 interface DeviceWithStatus extends Device { online: boolean | null }
 interface BranchSummary {
   branch: string
@@ -167,6 +168,7 @@ const todayStr = phtStr(new Date())
       // No TCP ping needed here; pinging per-device on each load caused 10s+ delays.
       const devicesWithStatus: DeviceWithStatus[] = deviceList.map(dev => ({
         ...dev,
+        syncEnabled: (dev as any).syncEnabled ?? true,
         online: dev.isActive
       }))
       setDevices(devicesWithStatus)
@@ -299,8 +301,30 @@ const todayStr = phtStr(new Date())
     onRecord: handleStreamRecord,
   })
 
+  // ── SSE: real-time device status updates ───────────────────────────────
+  const handleDeviceConnected = useCallback((payload: DeviceConnectedPayload) => {
+    setDevices(prev => prev.map(d => {
+      const fresh = payload.devices.find(sd => sd.id === d.id)
+      if (!fresh) return d
+      return { ...d, online: fresh.isActive, isActive: fresh.isActive, syncEnabled: fresh.syncEnabled }
+    }))
+  }, [])
+
+  const handleDeviceStatusChange = useCallback((payload: DeviceStatusPayload) => {
+    setDevices(prev => prev.map(d =>
+      d.id === payload.id
+        ? { ...d, online: payload.isActive, isActive: payload.isActive }
+        : d
+    ))
+  }, [])
+
+  useDeviceStream({
+    onConnected: handleDeviceConnected,
+    onStatusChange: handleDeviceStatusChange,
+  })
+
   useEffect(() => {
-    // Verify auth via cookie instead of localStorage
+    // Verify auth via cookie
     fetch('/api/auth/me', { credentials: 'include' })
       .then(r => { if (!r.ok) router.replace('/login') })
       .catch(() => router.replace('/login'))
@@ -472,9 +496,16 @@ const todayStr = phtStr(new Date())
                         <p className="text-xs font-bold text-slate-800 truncate leading-tight">{dev.name}</p>
                         <p className="text-[10px] text-slate-500 font-mono">{dev.ip}:{dev.port}</p>
                       </div>
-                      {dev.online
-                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                        : <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!dev.syncEnabled && (
+                          <span className="text-[8px] font-black uppercase text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full leading-none" title="Sync disabled">
+                            Sync Off
+                          </span>
+                        )}
+                        {dev.online
+                          ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                          : <XCircle className="w-3.5 h-3.5 text-rose-400" />}
+                      </div>
                     </div>
                   ))}
                 </div>
