@@ -7,6 +7,7 @@ import {
     testDeviceConnection,
     reconcileDevice,
     toggleDevice,
+    streamDeviceStatus,
 } from '../controllers/device.controller';
 import { authenticate } from '../middleware/auth.middleware';
 import { adminOrHR } from '../middleware/role.middleware';
@@ -15,6 +16,9 @@ const router = Router();
 
 router.use(authenticate);
 router.use(adminOrHR);
+
+// SSE stream — must be registered before /:id routes
+router.get('/stream', streamDeviceStatus);
 
 router.get('/', getAllDevices);
 router.post('/', createDevice);

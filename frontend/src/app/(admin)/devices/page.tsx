@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { Card } from '@/components/ui/card'
+import { useDeviceStream, DeviceStatusPayload, DeviceConnectedPayload } from '@/hooks/useDeviceStream'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -80,6 +81,43 @@ export default function DevicesPage() {
     }, [])
 
     useEffect(() => { fetchDevices() }, [fetchDevices])
+
+    // ── SSE: live device status updates ─────────────────────────────────────
+    // When a device transitions online or offline, update its isActive field
+    // in local state immediately without waiting for a manual refresh.
+    const handleDeviceConnected = useCallback((payload: DeviceConnectedPayload) => {
+        // The connected event sends the full current device list with accurate
+        // isActive values. Merge these into the existing device list so the
+        // cards show the correct status right after the SSE connection opens.
+        setDevices(prev => prev.map(device => {
+            const fresh = payload.devices.find(d => d.id === device.id)
+            if (!fresh) return device
+            return { ...device, isActive: fresh.isActive, syncEnabled: fresh.syncEnabled }
+        }))
+    }, [])
+
+    const handleDeviceStatus = useCallback((payload: DeviceStatusPayload) => {
+        // Patch only the device whose status changed — leave all others alone.
+        setDevices(prev => prev.map(device =>
+            device.id === payload.id
+                ? { ...device, isActive: payload.isActive }
+                : device
+        ))
+
+        // Show a brief toast so the admin knows something changed even if they
+        // are not looking at that particular device card.
+        showToast(
+            payload.isActive
+                ? `${payload.name} is back online`
+                : `${payload.name} went offline`,
+            payload.isActive
+        )
+    }, [])
+
+    useDeviceStream({
+        onConnected: handleDeviceConnected,
+        onStatusChange: handleDeviceStatus,
+    })
 
     const openAdd = () => {
         setEditingDevice(null)
