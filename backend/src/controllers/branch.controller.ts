@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { audit } from '../lib/auditLogger';
 
 // GET /api/branches - Get all branches
 export const getBranches = async (req: Request, res: Response) => {
@@ -40,6 +41,15 @@ export const createBranch = async (req: Request, res: Response) => {
             data: { name: name.trim(), updatedAt: new Date() }
         });
 
+        await audit({
+            action: 'CREATE',
+            entityType: 'Branch',
+            entityId: branch.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Created new branch "${branch.name}"`
+        });
+
         res.status(201).json({ success: true, branch });
     } catch (error) {
         console.error('Error creating branch:', error);
@@ -63,10 +73,31 @@ export const renameBranch = async (req: Request, res: Response) => {
         if (existing && existing.id !== id) {
             return res.status(409).json({ success: false, message: 'Branch name already exists' });
         }
+        const target = await prisma.branch.findUnique({ where: { id } });
+        if (!target) {
+            return res.status(404).json({ success: false, message: 'Branch not found' });
+        }
+
         const branch = await prisma.branch.update({
             where: { id },
             data: { name: trimmedName, updatedAt: new Date() }
         });
+
+        const changes: string[] = [];
+        if (target.name !== trimmedName) {
+            changes.push(`Updated name from "${target.name}" to "${trimmedName}"`);
+        }
+
+        await audit({
+            action: 'UPDATE',
+            entityType: 'Branch',
+            entityId: branch.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Renamed branch to "${branch.name}"`,
+            metadata: changes.length > 0 ? { updates: changes } : undefined
+        });
+
         res.json({ success: true, branch });
     } catch (error) {
         console.error('Error renaming branch:', error);
@@ -83,6 +114,16 @@ export const deleteBranch = async (req: Request, res: Response) => {
         }
 
         await prisma.branch.delete({ where: { id } });
+
+        await audit({
+            action: 'DELETE',
+            entityType: 'Branch',
+            entityId: id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Deleted branch ID ${id}`
+        });
+
         res.json({ success: true, message: 'Branch deleted' });
     } catch (error: any) {
         console.error('Error deleting branch:', error);

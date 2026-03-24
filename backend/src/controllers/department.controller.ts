@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { audit } from '../lib/auditLogger';
 
 // GET /api/departments
 export const getAllDepartments = async (req: Request, res: Response) => {
@@ -35,6 +36,16 @@ export const createDepartment = async (req: Request, res: Response) => {
             return res.status(400).json({ success: false, message: 'Department already exists' });
         }
         const department = await prisma.department.create({ data: { name: trimmedName, updatedAt: new Date() } });
+
+        await audit({
+            action: 'CREATE',
+            entityType: 'Department',
+            entityId: department.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Created new department "${department.name}"`
+        });
+
         res.status(201).json({ success: true, department });
     } catch (error) {
         console.error('Error creating department:', error);
@@ -58,10 +69,31 @@ export const renameDepartment = async (req: Request, res: Response) => {
         if (existing && existing.id !== id) {
             return res.status(409).json({ success: false, message: 'Department name already exists' });
         }
+        const target = await prisma.department.findUnique({ where: { id } });
+        if (!target) {
+            return res.status(404).json({ success: false, message: 'Department not found' });
+        }
+
         const department = await prisma.department.update({
             where: { id },
             data: { name: trimmedName, updatedAt: new Date() }
         });
+
+        const changes: string[] = [];
+        if (target.name !== trimmedName) {
+            changes.push(`Updated name from "${target.name}" to "${trimmedName}"`);
+        }
+
+        await audit({
+            action: 'UPDATE',
+            entityType: 'Department',
+            entityId: department.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Renamed department to "${department.name}"`,
+            metadata: changes.length > 0 ? { updates: changes } : undefined
+        });
+
         res.json({ success: true, department });
     } catch (error) {
         console.error('Error renaming department:', error);
@@ -81,6 +113,16 @@ export const deleteDepartment = async (req: Request, res: Response) => {
             return res.status(404).json({ success: false, message: 'Department not found' });
         }
         await prisma.department.delete({ where: { id } });
+
+        await audit({
+            action: 'DELETE',
+            entityType: 'Department',
+            entityId: id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Deleted department "${existing.name}"`
+        });
+
         res.json({ success: true, message: `Department "${existing.name}" deleted` });
     } catch (error) {
         console.error('Error deleting department:', error);

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { syncEmployeesToDevice, enrollEmployeeFingerprint, addUserToDevice, deleteUserFromDevice, findNextSafeZkId, acquireRegistrationMutex } from '../services/zkServices';
+import { audit } from '../lib/auditLogger';
 
 // GET /api/employees - Get all employees
 export const getAllEmployees = async (req: Request, res: Response) => {
@@ -137,6 +138,16 @@ export const deleteEmployee = async (req: Request, res: Response) => {
                 employmentStatus: true,
             },
         });
+
+        await audit({
+            action: 'STATUS_CHANGE',
+            entityType: 'Employee',
+            entityId: employeeId,
+            performedBy: req.user?.employeeId,
+            details: `Employee ${employee.firstName} ${employee.lastName} deactivated`,
+            metadata: { previousStatus: employee.employmentStatus, newStatus: 'INACTIVE' }
+        });
+
         res.json({
             success: true,
             message: `Employee "${employee.firstName} ${employee.lastName}" marked as inactive`,
@@ -195,6 +206,15 @@ export const reactivateEmployee = async (req: Request, res: Response) => {
                 lastName: true,
                 employmentStatus: true,
             },
+        });
+
+        await audit({
+            action: 'STATUS_CHANGE',
+            entityType: 'Employee',
+            entityId: employeeId,
+            performedBy: req.user?.employeeId,
+            details: `Employee ${updatedEmployee.firstName} ${updatedEmployee.lastName} reactivated`,
+            metadata: { previousStatus: existingEmployee.employmentStatus, newStatus: 'ACTIVE' }
         });
 
         res.json({
@@ -273,6 +293,15 @@ export const createEmployee = async (req: Request, res: Response) => {
         });
 
         if (existingEmployee) {
+            await audit({
+                action: 'CREATE',
+                level: 'WARN',
+                entityType: 'Employee',
+                performedBy: req.user?.employeeId,
+                details: `Failed to create employee: employee already exist or device cannot be reached`,
+                metadata: { email, employeeNumber }
+            });
+            
             return res.status(400).json({
                 success: false,
                 message: 'Employee with this email or employee number already exists'
@@ -339,6 +368,15 @@ export const createEmployee = async (req: Request, res: Response) => {
 
         console.log(`[API] Created employee: ${newEmployee.firstName} ${newEmployee.lastName} (zkId: ${newEmployee.zkId})`);
 
+        await audit({
+            action: 'CREATE',
+            entityType: 'Employee',
+            entityId: newEmployee.id,
+            performedBy: req.user?.employeeId,
+            details: `Created employee ${newEmployee.firstName} ${newEmployee.lastName}`,
+            metadata: { email, role: newEmployee.role, department, employeeNumber }
+        });
+
         // ── Respond immediately — device sync happens in the background ──────
         // We do NOT await the device call here. The ZKTeco device may take up to
         // 25 s to time out (3 retries × ~8 s each). Holding the HTTP response
@@ -368,6 +406,16 @@ export const createEmployee = async (req: Request, res: Response) => {
 
     } catch (error: any) {
         console.error('Error creating employee:', error);
+        
+        await audit({
+            action: 'CREATE',
+            level: 'ERROR',
+            entityType: 'Employee',
+            performedBy: req.user?.employeeId,
+            details: `Failed to create employee due to server error: ${error.message}`,
+            metadata: { error: error.message }
+        });
+
         res.status(500).json({
             success: false,
             message: 'Failed to create employee',
@@ -408,11 +456,37 @@ export const enrollEmployeeFingerprintController = async (req: Request, res: Res
         const result = await enrollEmployeeFingerprint(employeeId, finger, device);
 
         if (result.success) {
+            const emp = await prisma.employee.findUnique({ 
+                where: { id: employeeId }, 
+                select: { firstName: true, lastName: true, zkId: true }
+            });
+            
+            await audit({
+                action: 'UPDATE',
+                entityType: 'Employee',
+                entityId: employeeId,
+                performedBy: req.user?.employeeId,
+                details: `Triggered fingerprint enrollment on device for ${emp?.firstName} ${emp?.lastName} (Finger ${finger})`,
+                metadata: { deviceId: device, fingerIndex: finger, zkId: emp?.zkId }
+            });
+
             return res.status(200).json({
                 success: true,
                 message: result.message,
             });
         } else {
+            const emp = await prisma.employee.findUnique({ where: { id: employeeId }, select: { firstName: true, lastName: true } });
+            
+            await audit({
+                action: 'UPDATE',
+                level: 'ERROR',
+                entityType: 'Employee',
+                entityId: employeeId,
+                performedBy: req.user?.employeeId,
+                details: `Failed to enroll fingerprint for ${emp?.firstName} ${emp?.lastName} (Finger ${finger}): ${result.message}`,
+                metadata: { deviceId: device, fingerIndex: finger, error: result.error || result.message }
+            });
+
             return res.status(500).json({
                 success: false,
                 message: result.message || 'Enrollment failed',
@@ -422,6 +496,18 @@ export const enrollEmployeeFingerprintController = async (req: Request, res: Res
 
     } catch (error: any) {
         console.error('[API] Enrollment error:', error);
+        
+        const empId = req.params.id ? parseInt(req.params.id as string) : undefined;
+        await audit({
+            action: 'UPDATE',
+            level: 'ERROR',
+            entityType: 'Employee',
+            entityId: isNaN(empId as number) ? undefined : empId,
+            performedBy: req.user?.employeeId,
+            details: `Exception while starting fingerprint enrollment: ${error.message}`,
+            metadata: { error: error.message, body: req.body }
+        });
+
         return res.status(500).json({
             success: false,
             message: 'Failed to start enrollment',
@@ -516,6 +602,28 @@ export const updateEmployee = async (req: Request, res: Response) => {
             },
         });
 
+        const changes: string[] = [];
+        for (const [key, newValue] of Object.entries(updateData)) {
+            if (key === 'updatedAt' || key === 'password') continue;
+            const oldValue = (existingEmployee as any)[key];
+            if (oldValue !== newValue) {
+                const oldValStr = oldValue instanceof Date ? oldValue.toISOString().split('T')[0] : (oldValue || 'empty');
+                const newValStr = newValue instanceof Date ? newValue.toISOString().split('T')[0] : (newValue || 'empty');
+                if (oldValStr !== newValStr) {
+                    changes.push(`Updated ${key.replace(/([A-Z])/g, ' $1').toLowerCase().trim()} from "${oldValStr}" to "${newValStr}"`);
+                }
+            }
+        }
+
+        await audit({
+            action: 'UPDATE',
+            entityType: 'Employee',
+            entityId: employeeId,
+            performedBy: req.user?.employeeId,
+            details: `Updated employee ${updatedEmployee.firstName} ${updatedEmployee.lastName}`,
+            metadata: changes.length > 0 ? { updates: changes } : undefined
+        });
+
         res.json({
             success: true,
             message: 'Employee updated successfully',
@@ -583,6 +691,15 @@ export const permanentDeleteEmployee = async (req: Request, res: Response) => {
             await tx.attendanceLog.deleteMany({ where: { employeeId } });
             await tx.attendance.deleteMany({ where: { employeeId } });
             await tx.employee.delete({ where: { id: employeeId } });
+        });
+
+        await audit({
+            action: 'DELETE',
+            entityType: 'Employee',
+            entityId: employeeId,
+            performedBy: req.user?.employeeId,
+            details: `Permanently deleted employee ${employee.firstName} ${employee.lastName}`,
+            metadata: { email: employee.email, role: employee.role }
         });
 
         res.json({

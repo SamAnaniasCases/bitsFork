@@ -168,6 +168,7 @@ export default function UserAccountsPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(body)
       })
 
@@ -188,6 +189,7 @@ export default function UserAccountsPage() {
     try {
       const res = await fetch(`/api/users/${id}/toggle-status`, {
         method: 'PATCH',
+        credentials: 'include',
       })
       const data = await res.json()
       if (data.success) {

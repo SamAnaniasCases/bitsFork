@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/token.utils';
+import { audit } from '../lib/auditLogger';
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -177,6 +178,16 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             }
         });
 
+        await audit({
+            action: 'LOGIN',
+            entityType: 'Account',
+            entityId: employee.id,
+            performedBy: employee.id,
+            source: 'admin-panel',
+            details: `User ${employee.email} logged in successfully`,
+            metadata: { role: employee.role, email: employee.email }
+        });
+
 
     } catch (error: any) {
         console.error('Login failed:', error);
@@ -284,6 +295,17 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
         res.clearCookie('refresh_token', cookieOptions);
 
         res.status(200).json({ success: true, message: 'Logged out successfully' });
+
+        if (req.user?.employeeId) {
+            await audit({
+                action: 'LOGOUT',
+                entityType: 'Account',
+                entityId: req.user.employeeId,
+                performedBy: req.user.employeeId,
+                source: 'admin-panel',
+                details: `User logged out`,
+            });
+        }
 
     } catch (error: any) {
         console.error('Logout failed:', error);

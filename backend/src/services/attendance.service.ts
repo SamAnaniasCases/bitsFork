@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import attendanceEmitter from '../lib/attendanceEmitter';
+import { audit } from '../lib/auditLogger';
 
 /**
  * Attendance Service - Strategy C (Grace Period Toggle)
@@ -118,6 +119,15 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                     });
                     created++;
 
+                    await audit({
+                        action: 'CHECK_IN',
+                        entityType: 'Attendance',
+                        entityId: createdRecord.id,
+                        performedBy: createdRecord.employeeId,
+                        source: 'device-sync',
+                        details: `Employee checked in (${isLate ? 'Late' : 'On-time'})`
+                    });
+
                     const shift = createdRecord.employee?.Shift ?? null;
                     const metrics = calculateAttendanceMetrics(createdRecord, shift);
 
@@ -179,6 +189,15 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                         });
                         updated++;
 
+                        await audit({
+                            action: 'CHECK_OUT',
+                            entityType: 'Attendance',
+                            entityId: updatedRecord.id,
+                            performedBy: updatedRecord.employeeId,
+                            source: 'device-sync',
+                            details: `Employee checked out (updated)`
+                        });
+
                         const shift = updatedRecord.employee?.Shift ?? null;
                         const metrics = calculateAttendanceMetrics(updatedRecord, shift);
 
@@ -215,6 +234,15 @@ export const processAttendanceLogs = async (): Promise<ProcessResult> => {
                         }
                     });
                     updated++;
+
+                    await audit({
+                        action: 'CHECK_OUT',
+                        entityType: 'Attendance',
+                        entityId: updatedRecord2.id,
+                        performedBy: updatedRecord2.employeeId,
+                        source: 'device-sync',
+                        details: `Employee checked out`
+                    });
 
                     const shift2 = updatedRecord2.employee?.Shift ?? null;
                     const metrics2 = calculateAttendanceMetrics(updatedRecord2, shift2);
@@ -306,6 +334,15 @@ export const autoCheckoutEmployees = async (): Promise<number> => {
             }
         });
 
+        if (result.count > 0) {
+            await audit({
+                action: 'AUTO_CHECKOUT',
+                entityType: 'System',
+                source: 'cron',
+                details: `Auto-checkout applied to ${result.count} records at 5:00 PM`
+            });
+        }
+
         console.log(`[Attendance] Auto-checkout completed: ${result.count} employees checked out at 5:00 PM`);
         return result.count;
     } catch (error: any) {
@@ -350,6 +387,15 @@ export const repairMissingCheckouts = async (): Promise<number> => {
                 }
             });
             repairedCount++;
+        }
+
+        if (repairedCount > 0) {
+            await audit({
+                action: 'AUTO_CHECKOUT',
+                entityType: 'System',
+                source: 'startup-repair',
+                details: `Startup repair: Auto-checkout applied to ${repairedCount} historic records`
+            });
         }
 
         console.log(`[Attendance] Startup Repair: Fixed ${repairedCount} missing checkouts from previous days`);

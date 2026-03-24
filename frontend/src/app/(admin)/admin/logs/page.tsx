@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
     ScrollText, Filter, ChevronLeft, ChevronRight,
     LogIn, LogOut, Fingerprint, Clock, CalendarDays,
-    Search, RefreshCw
+    Search, RefreshCw, UserPlus, Trash2, Edit, Shield, Bot, AlertTriangle, Info, XCircle
 } from 'lucide-react'
 
 /* ── Types ── */
@@ -19,6 +19,9 @@ interface LogEntry {
     details: string
     source: string
     status?: string
+    level?: 'INFO' | 'WARN' | 'ERROR'
+    employeeRole?: string
+    metadata?: any
 }
 interface LogMeta {
     total: number
@@ -41,6 +44,7 @@ export default function SystemLogsPage() {
     const [meta, setMeta] = useState<LogMeta | null>(null)
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
+    const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
 
     // Filters
     const [activeTab, setActiveTab] = useState<'all' | 'timekeeping' | 'system'>('all')
@@ -110,27 +114,44 @@ export default function SystemLogsPage() {
     }
 
     const getActionIcon = (action: string) => {
-        switch (action) {
-            case 'Check In': return <LogIn className="w-4 h-4 text-emerald-600" />
-            case 'Check Out': return <LogOut className="w-4 h-4 text-blue-600" />
-            case 'Device Scan': return <Fingerprint className="w-4 h-4 text-slate-500" />
-            default: return <Clock className="w-4 h-4 text-slate-400" />
-        }
+        const a = action.toUpperCase()
+        if (a.includes('CHECK_IN') || a === 'CHECK IN') return <LogIn className="w-4 h-4 text-emerald-600" />
+        if (a.includes('CHECK_OUT') || a === 'CHECK OUT') return <LogOut className="w-4 h-4 text-blue-600" />
+        if (a.includes('LOGIN')) return <LogIn className="w-4 h-4 text-emerald-600" />
+        if (a.includes('LOGOUT')) return <LogOut className="w-4 h-4 text-slate-500" />
+        if (a === 'DEVICE SCAN') return <Fingerprint className="w-4 h-4 text-slate-500" />
+        if (a === 'CREATE') return <UserPlus className="w-4 h-4 text-emerald-600" />
+        if (a === 'UPDATE') return <Edit className="w-4 h-4 text-blue-600" />
+        if (a === 'DELETE') return <Trash2 className="w-4 h-4 text-red-600" />
+        if (a === 'STATUS_CHANGE') return <Shield className="w-4 h-4 text-amber-600" />
+        if (a === 'AUTO_CHECKOUT') return <Bot className="w-4 h-4 text-violet-600" />
+        return <Clock className="w-4 h-4 text-slate-400" />
     }
 
-    const getActionBadge = (action: string, status?: string) => {
-        if (action === 'Check In') {
-            if (status === 'late') return 'bg-amber-50 text-amber-700 border-amber-200'
-            return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-        }
-        if (action === 'Check Out') return 'bg-blue-50 text-blue-700 border-blue-200'
+    const getActionBadge = (action: string) => {
+        const a = action.toUpperCase()
+        if (a.includes('CHECK_IN') || a === 'CHECK IN' || a === 'CREATE' || a.includes('LOGIN')) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+        if (a.includes('CHECK_OUT') || a === 'CHECK OUT' || a === 'UPDATE') return 'bg-blue-50 text-blue-700 border-blue-200'
+        if (a === 'DELETE') return 'bg-red-50 text-red-700 border-red-200'
+        if (a === 'STATUS_CHANGE') return 'bg-amber-50 text-amber-700 border-amber-200'
+        if (a === 'AUTO_CHECKOUT') return 'bg-violet-50 text-violet-700 border-violet-200'
         return 'bg-slate-50 text-slate-600 border-slate-200'
     }
 
-    const getTypeBadge = (type: string) => {
-        return type === 'timekeeping'
-            ? 'bg-violet-50 text-violet-700 border-violet-200'
-            : 'bg-slate-50 text-slate-600 border-slate-200'
+    const getLevelBadge = (level?: string) => {
+        if (level === 'ERROR') return 'bg-red-50 text-red-700 border-red-200'
+        if (level === 'WARN') return 'bg-amber-50 text-amber-700 border-amber-200'
+        return 'bg-slate-50 text-slate-600 border-slate-200'
+    }
+
+    const getAvatarBg = (role?: string) => {
+        const r = role?.toUpperCase();
+        // Theme Colors: Admin (Blue), HR (Emerald), User/Employee (Amber), System (Slate)
+        if (!r || r === 'SYSTEM') return 'bg-gradient-to-br from-slate-400 to-slate-500'
+        if (r === 'ADMIN') return 'bg-gradient-to-br from-blue-500 to-indigo-600'
+        if (r === 'HR') return 'bg-gradient-to-br from-emerald-500 to-teal-600' // Aligned with user-accounts HR color
+        if (r === 'USER' || r === 'EMPLOYEE') return 'bg-gradient-to-br from-amber-500 to-orange-600' // Distinctive but thematic
+        return 'bg-gradient-to-br from-slate-400 to-slate-500'
     }
 
     /* ── Loading skeleton ── */
@@ -234,13 +255,14 @@ export default function SystemLogsPage() {
             <div className="flex-1 bg-white rounded-xl border border-slate-100 shadow-sm flex flex-col min-h-0 overflow-hidden">
 
                 {/* Desktop Table Header (hidden on mobile) */}
-                <div className="hidden lg:grid grid-cols-[140px_1fr_120px_1fr_120px_100px] gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-500 uppercase tracking-widest shrink-0">
+                <div className="hidden lg:grid grid-cols-[140px_1fr_130px_1fr_110px_90px_70px] gap-3 px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-500 uppercase tracking-widest shrink-0">
                     <span>Timestamp</span>
                     <span>Employee</span>
                     <span>Action</span>
                     <span>Details</span>
                     <span>Source</span>
                     <span>Type</span>
+                    <span>Level</span>
                 </div>
 
                 {/* Mobile Header */}
@@ -268,7 +290,10 @@ export default function SystemLogsPage() {
                             return (
                                 <div key={log.id}>
                                     {/* Desktop row (lg+) */}
-                                    <div className="hidden lg:grid grid-cols-[140px_1fr_120px_1fr_120px_100px] gap-3 px-4 py-2.5 border-b border-slate-50 hover:bg-slate-50/50 transition-colors items-center">
+                                    <div 
+                                        onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                                        className={`hidden lg:grid grid-cols-[140px_1fr_130px_1fr_110px_90px_70px] gap-3 px-4 py-2.5 border-b border-slate-50 transition-colors cursor-pointer items-center ${expandedLogId === log.id ? 'bg-slate-50' : 'hover:bg-slate-50/50'}`}
+                                    >
                                         {/* Timestamp */}
                                         <div>
                                             <p className="text-xs font-semibold text-slate-700">{time}</p>
@@ -277,9 +302,9 @@ export default function SystemLogsPage() {
 
                                         {/* Employee */}
                                         <div className="flex items-center gap-2 min-w-0">
-                                            <div className="w-7 h-7 rounded-full bg-linear-to-br from-red-500 to-rose-600 flex items-center justify-center shrink-0">
+                                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-sm ${getAvatarBg(log.employeeRole)}`}>
                                                 <span className="text-white text-[9px] font-black">
-                                                    {log.employeeName?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'}
+                                                    {log.employeeName === 'System' ? 'SY' : log.employeeName?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'}
                                                 </span>
                                             </div>
                                             <span className="text-xs font-bold text-slate-800 truncate">{log.employeeName}</span>
@@ -288,30 +313,42 @@ export default function SystemLogsPage() {
                                         {/* Action */}
                                         <div className="flex items-center gap-1.5">
                                             {getActionIcon(log.action)}
-                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getActionBadge(log.action, log.status)}`}>
-                                                {log.action}
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getActionBadge(log.action)}`}>
+                                                {log.action.replace('_', ' ')}
                                             </span>
                                         </div>
 
                                         {/* Details */}
-                                        <p className="text-xs text-slate-500 truncate">{log.details}</p>
+                                        <p className="text-xs text-slate-500 truncate" title={log.details}>{log.details}</p>
 
                                         {/* Source */}
                                         <p className="text-xs font-semibold text-slate-600 truncate">{log.source}</p>
 
                                         {/* Type */}
-                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border w-fit ${getTypeBadge(log.type)}`}>
-                                            {log.type === 'timekeeping' ? 'Timekeeping' : 'System'}
-                                        </span>
+                                        <div>
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border w-fit ${log.type === 'timekeeping' ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                                                {log.type === 'timekeeping' ? 'Timekeeping' : 'System'}
+                                            </span>
+                                        </div>
+
+                                        {/* Level */}
+                                        <div>
+                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border w-fit ${getLevelBadge(log.level)}`}>
+                                                {log.level || 'INFO'}
+                                            </span>
+                                        </div>
                                     </div>
 
                                     {/* Mobile card (< lg) */}
-                                    <div className="lg:hidden px-4 py-3 border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                                    <div 
+                                        onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                                        className={`lg:hidden px-4 py-3 border-b border-slate-50 transition-colors cursor-pointer ${expandedLogId === log.id ? 'bg-slate-50' : 'hover:bg-slate-50/50'}`}
+                                    >
                                         <div className="flex items-start justify-between gap-2">
                                             <div className="flex items-center gap-2 min-w-0 flex-1">
-                                                <div className="w-8 h-8 rounded-full bg-linear-to-br from-red-500 to-rose-600 flex items-center justify-center shrink-0">
+                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm ${getAvatarBg(log.employeeRole)}`}>
                                                     <span className="text-white text-[10px] font-black">
-                                                        {log.employeeName?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'}
+                                                        {log.employeeName === 'System' ? 'SY' : log.employeeName?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'}
                                                     </span>
                                                 </div>
                                                 <div className="min-w-0">
@@ -319,15 +356,20 @@ export default function SystemLogsPage() {
                                                     <p className="text-[10px] text-slate-400 font-medium">{date} · {time}</p>
                                                 </div>
                                             </div>
-                                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getTypeBadge(log.type)}`}>
-                                                {log.type === 'timekeeping' ? 'Time' : 'Sys'}
-                                            </span>
+                                            <div className="flex flex-col gap-1 items-end">
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${log.type === 'timekeeping' ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                                                    {log.type === 'timekeeping' ? 'Time' : 'Sys'}
+                                                </span>
+                                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${getLevelBadge(log.level)}`}>
+                                                    {log.level || 'INFO'}
+                                                </span>
+                                            </div>
                                         </div>
                                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                                             <div className="flex items-center gap-1">
                                                 {getActionIcon(log.action)}
-                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getActionBadge(log.action, log.status)}`}>
-                                                    {log.action}
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getActionBadge(log.action)}`}>
+                                                    {log.action.replace('_', ' ')}
                                                 </span>
                                             </div>
                                             {log.source && (
@@ -337,9 +379,79 @@ export default function SystemLogsPage() {
                                             )}
                                         </div>
                                         {log.details && (
-                                            <p className="text-xs text-slate-500 mt-1.5 truncate">{log.details}</p>
+                                            <p className="text-xs text-slate-500 mt-1.5 line-clamp-2">{log.details}</p>
                                         )}
                                     </div>
+                                    
+                                    {/* Expanded Metadata Viewer */}
+                                    {expandedLogId === log.id && (
+                                        <div className="px-4 lg:px-[156px] py-4 bg-slate-50/80 border-b border-slate-100 shadow-inner">
+                                            <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                                <Info className="w-4 h-4 text-blue-500" /> Event Details & Context
+                                            </div>
+                                            
+                                            {log.metadata && Object.keys(log.metadata).length > 0 ? (
+                                                <div className="mt-3 flex flex-col gap-3">
+                                                    {/* Render human-readable array updates if they exist */}
+                                                    {Array.isArray(log.metadata.updates) && log.metadata.updates.length > 0 && (
+                                                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                                            <h4 className="text-[10px] font-black uppercase tracking-wider text-indigo-500 mb-3">Actual Changes</h4>
+                                                            <ul className="space-y-2">
+                                                                {log.metadata.updates.map((update: string, i: number) => (
+                                                                    <li key={i} className="flex items-start gap-2 text-xs font-medium text-slate-700">
+                                                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 shrink-0" />
+                                                                        {update}
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Render distinct error card if an error exists */}
+                                                    {(log.metadata.error || log.metadata.errorMessage) && (
+                                                        <div className="bg-red-50 p-4 rounded-xl border border-red-100 shadow-sm flex flex-col gap-1">
+                                                            <span className="text-[10px] font-black uppercase tracking-wider text-red-500">Error Details</span>
+                                                            <span className="text-xs font-bold text-red-700 break-all">{log.metadata.error || log.metadata.errorMessage}</span>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Render other primitive info fields, stripping objects/arrays and sensitive terms */}
+                                                    {Object.entries(log.metadata).filter(([key, val]) => 
+                                                        key !== 'updates' && 
+                                                        key !== 'error' && 
+                                                        key !== 'errorMessage' && 
+                                                        key !== 'body' && 
+                                                        key !== 'password' &&
+                                                        key !== 'changedFields' &&
+                                                        typeof val !== 'object' // Strip out raw arrays/objects
+                                                    ).length > 0 && (
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                                            {Object.entries(log.metadata).filter(([key, val]) => 
+                                                                key !== 'updates' && 
+                                                                key !== 'error' && 
+                                                                key !== 'errorMessage' && 
+                                                                key !== 'body' && 
+                                                                key !== 'password' &&
+                                                                key !== 'changedFields' &&
+                                                                typeof val !== 'object'
+                                                            ).map(([key, value]) => (
+                                                                <div key={key} className="flex flex-col gap-1 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                                                                    <span className="text-xs font-semibold text-slate-800 break-all">
+                                                                        {String(value)}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <p className="text-[11px] text-slate-400 font-medium italic mt-2 ml-1">
+                                                    No additional metadata payload was attached to this event.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )
                         })
