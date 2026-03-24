@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAttendanceStream, AttendanceStreamPayload } from '@/hooks/useAttendanceStream'
+import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll'
 import * as XLSX from 'xlsx'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -59,6 +60,7 @@ export default function BiometricPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const rowsPerPage = 10
+  const dragScrollRef = useHorizontalDragScroll()
 
   // Stats
   const [stats, setStats] = useState({
@@ -578,7 +580,7 @@ export default function BiometricPage() {
         </div>
 
         {/* Table */}
-        <div className="overflow-x-auto">
+        <div ref={dragScrollRef} className="overflow-x-auto scrollbar-hide">
           <table className="w-full text-left">
             <thead className="sticky top-0 z-10">
               <tr className="border-b border-border bg-secondary/50 backdrop-blur-sm">

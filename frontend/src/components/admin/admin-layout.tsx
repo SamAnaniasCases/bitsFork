@@ -42,8 +42,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             />
 
             {/* Main Content Area */}
-            <div className={`h-[calc(100vh-4rem)] mt-16 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-72'}`}>
-                <main className="h-full overflow-y-auto p-4 md:p-8">
+            <div className={`h-[calc(100vh-4rem)] mt-16 transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-24' : 'lg:ml-68'}`}>
+                <main className="h-full overflow-y-auto scrollbar-hide p-4 md:p-8">
                     {children}
                 </main>
             </div>

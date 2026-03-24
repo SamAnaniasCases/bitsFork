@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll';
 import * as XLSX from 'xlsx';
 import {
   Search,
@@ -66,6 +67,7 @@ function AttendanceContent() {
   const [stats, setStats] = useState({ onTime: 0, late: 0, absent: 0, total: 0, avgHours: '0', totalOT: '0', totalUT: '0' });
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const dragScrollRef = useHorizontalDragScroll();
 
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -398,7 +400,8 @@ function AttendanceContent() {
 
       {/* Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full text-left text-sm border-collapse">
+        <div ref={dragScrollRef} className="overflow-x-auto scrollbar-hide">
+        <table className="w-full text-left text-sm border-collapse min-w-[1100px]">
           <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
             <tr>
               <th className="px-6 py-4">Employee</th>
@@ -484,6 +487,7 @@ function AttendanceContent() {
             )}
           </tbody>
         </table>
+        </div>
 
         {/* Pagination */}
         {totalPages > 1 && (

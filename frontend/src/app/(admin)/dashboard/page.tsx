@@ -314,7 +314,7 @@ const todayStr = phtStr(new Date())
 
   /* ── Loading skeleton ─── */
   if (loading) return (
-    <div className="flex flex-col gap-3 p-4 lg:p-5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)]">
+    <div className="flex flex-col gap-3 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)]">
       <div className="flex items-center justify-between">
         <Skeleton className="h-7 w-44" />
         <Skeleton className="h-8 w-28 rounded-lg" />
@@ -337,7 +337,7 @@ const todayStr = phtStr(new Date())
   const todayName = dayNames[new Date().getDay()]
 
   return (
-    <div className="flex flex-col gap-2.5 p-4 lg:p-5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)] lg:overflow-hidden">
+    <div className="flex flex-col gap-2.5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)] lg:overflow-hidden">
 
       {/* ── Header ─── */}
       <div className="flex items-center justify-between shrink-0">
@@ -543,8 +543,8 @@ const todayStr = phtStr(new Date())
                       <div className="shrink-0 text-right hidden sm:block">
                         <div className="flex items-center gap-1 justify-end">
                           {a.eventType === 'check-in'
-                            ? <LogIn className="w-2.5 h-2.5 text-emerald-500" />
-                            : <LogOut className="w-2.5 h-2.5 text-slate-400" />
+                            ? <LogIn className="w-3.5 h-3.5 text-emerald-500" />
+                            : <LogOut className="w-3.5 h-3.5 text-slate-400" />
                           }
                           <span className="text-[10px] font-mono text-slate-600">{a.time}</span>
                         </div>

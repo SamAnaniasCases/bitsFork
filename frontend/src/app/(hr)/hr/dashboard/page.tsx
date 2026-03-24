@@ -1,173 +1,533 @@
 "use client"
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAttendanceStream, AttendanceStreamPayload } from '@/hooks/useAttendanceStream';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+} from 'recharts';
 import {
   Users,
   UserCheck,
   MapPin,
-  Fingerprint,
   AlertCircle,
-  Zap,
-  ShieldCheck,
-  UserMinus
+  UserX,
+  Timer,
+  CalendarDays,
+  ArrowUpRight,
+  ArrowDownRight,
+  Activity,
+  ArrowRight,
+  Clock,
+  LogIn,
+  LogOut
 } from 'lucide-react';
+
+interface StatItem {
+  label: string;
+  value: string | number;
+  sub: string;
+  icon: React.ReactNode;
+  color: string;
+  path: string;
+}
+
+interface BranchData {
+  name: string;
+  percentage: number;
+  color: string;
+}
+
+interface LiveLog {
+  label: string;
+  action: string;
+  time: string;
+  eventTs: number;
+  eventType: 'check-in' | 'check-out';
+  status: 'on-time' | 'late' | 'undertime';
+}
+
+interface WeekDay {
+  day: string;
+  present: number;
+  late: number;
+  absent: number;
+}
+
+/* ── Helpers ─── */
+const phtStr = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' })
+const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function getWeekDates(): { day: string; date: Date }[] {
+  const now = new Date()
+  const todayIndex = now.getDay()
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - ((todayIndex === 0 ? 7 : todayIndex) - 1))
+  monday.setHours(0, 0, 0, 0)
+  return Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return { day: dayNames[d.getDay()], date: d }
+  })
+}
+
+function ChartTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-black text-slate-700 mb-1">{label}</p>
+      {payload.map((p: any) => (
+        <div key={p.name} className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: p.fill }} />
+          <span className="text-slate-600 capitalize">{p.name}</span>
+          <span className="ml-auto font-black text-slate-800">{p.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function HRDashboard() {
   const router = useRouter();
 
-  const stats = [
-    {
-      label: "Total Employees",
-      value: "150",
-      sub: "Active",
-      icon: <Users size={20} />,
-      color: "bg-red-500",
-      path: "/hr/employees"
-    },
-    {
-      label: "Total Present",
-      value: "138",
-      sub: "Live",
-      icon: <UserCheck size={20} />,
-      color: "bg-emerald-500",
-      path: "/hr/attendance?status=Present"
-    },
-    {
-      label: "Total Lates",
-      value: "12",
-      sub: "Today",
-      icon: <AlertCircle size={20} />,
-      color: "bg-amber-500",
-      path: "/hr/attendance?status=Late"
-    },
-    {
-      label: "Total Absents",
-      value: "7",
-      sub: "Today",
-      icon: <UserMinus size={20} />,
-      color: "bg-slate-500",
-      path: "/hr/attendance?status=Absent"
-    },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [totalOnTime, setTotalOnTime] = useState(0);
+  const [totalLate, setTotalLate] = useState(0);
+  const [totalAbsent, setTotalAbsent] = useState(0);
 
-  const branchPresence = [
-    { name: "Main Office", percentage: 94, color: "bg-emerald-500" },
-    { name: "Tayud Branch", percentage: 90, color: "bg-emerald-500" },
-    { name: "Makati Branch", percentage: 91, color: "bg-emerald-500" },
-  ];
+  // State for dynamic data
+  const [stats, setStats] = useState<StatItem[]>([
+    { label: "Total Employees", value: "0", sub: "Active", icon: <Users size={20} />, color: "bg-red-500", path: "/hr/employees" },
+    { label: "On Time", value: "0", sub: "Live", icon: <UserCheck size={20} />, color: "bg-emerald-500", path: "/hr/attendance?status=Present" },
+    { label: "Total Lates", value: "0", sub: "Today", icon: <AlertCircle size={20} />, color: "bg-amber-500", path: "/hr/attendance?status=Late" },
+    { label: "Total Absents", value: "0", sub: "Today", icon: <UserX size={20} />, color: "bg-slate-500", path: "/hr/attendance?status=Absent" },
+  ]);
 
-  const handleStatClick = (path: string) => {
-    router.push(path);
-  };
+  const [branchPresence, setBranchPresence] = useState<BranchData[]>([]);
+  const [liveLogs, setLiveLogs] = useState<LiveLog[]>([]);
+  const [weeklyData, setWeeklyData] = useState<WeekDay[]>([]);
+
+  const load = useCallback(async () => {
+    try {
+      const todayStr = phtStr(new Date());
+      const weekDates = getWeekDates();
+      const weekStart = phtStr(weekDates[0].date);
+      const weekEnd = phtStr(weekDates[4].date);
+
+      const [bRes, eRes, aRes, wRes] = await Promise.all([
+        fetch('/api/branches', { credentials: 'include' }),
+        fetch('/api/employees?limit=5000', { credentials: 'include' }),
+        fetch(`/api/attendance?startDate=${todayStr}&endDate=${todayStr}&limit=5000`, { credentials: 'include' }),
+        fetch(`/api/attendance?startDate=${weekStart}&endDate=${weekEnd}&limit=5000`, { credentials: 'include' }),
+      ]);
+
+      if (eRes.status === 401) { router.replace('/login'); return; }
+
+      const bd = bRes.ok ? await bRes.json() : { success: false };
+      const ed = await eRes.json();
+      const ad = await aRes.json();
+      const wd = await wRes.json();
+
+      const branchList: any[] = bd.success ? (bd.branches || bd.data || []) : [];
+      const emps: any[] = ed.success ? (ed.employees || ed.data || []) : [];
+      const atts: any[] = ad.success ? (ad.data || []) : [];
+      const weekAtts: any[] = wd.success ? (wd.data || []) : [];
+
+      // ── KPI Calculations ──
+      const activeCount = emps.filter(e => e.employmentStatus === 'ACTIVE').length;
+      const onTime = atts.filter(a => a.checkInTime && (!a.lateMinutes || a.lateMinutes === 0)).length;
+      const lates = atts.filter(a => a.checkInTime && a.lateMinutes > 0).length;
+      const absents = Math.max(0, activeCount - onTime - lates);
+
+      setTotalOnTime(onTime);
+      setTotalLate(lates);
+      setTotalAbsent(absents);
+
+      setStats([
+        { label: "Total Employees", value: activeCount, sub: "Active", icon: <Users size={20} />, color: "bg-red-500", path: "/hr/employees" },
+        { label: "On Time", value: onTime, sub: "Live", icon: <UserCheck size={20} />, color: "bg-emerald-500", path: "/hr/attendance?status=Present" },
+        { label: "Total Lates", value: lates, sub: "Today", icon: <AlertCircle size={20} />, color: "bg-amber-500", path: "/hr/attendance?status=Late" },
+        { label: "Total Absents", value: absents, sub: "Today", icon: <UserX size={20} />, color: "bg-slate-500", path: "/hr/attendance?status=Absent" },
+      ]);
+
+      // ── Weekly Chart Data ──
+      const todayPHTStr = phtStr(new Date());
+      const weekly: WeekDay[] = weekDates.map(({ day, date }) => {
+        const dateStr = phtStr(date);
+        const dayAtts = weekAtts.filter(a => {
+          const recDate = a.date ? phtStr(new Date(a.date)) : '';
+          return recDate === dateStr;
+        });
+        const late = dayAtts.filter(a => a.checkInTime && a.lateMinutes > 0).length;
+        const present = dayAtts.filter(a => a.checkInTime && (!a.lateMinutes || a.lateMinutes === 0)).length;
+        const absent = dateStr <= todayPHTStr ? Math.max(0, activeCount - present - late) : 0;
+        return { day, present, late, absent };
+      });
+      setWeeklyData(weekly);
+
+      // ── Branch Presence ──
+      const branchData: BranchData[] = branchList.map(b => {
+        const branchEmps = emps.filter(e => e.branch === b.name && e.employmentStatus === 'ACTIVE');
+        const branchAtts = atts.filter(a => a.employee?.branch === b.name && a.checkInTime);
+        const total = branchEmps.length;
+        const present = branchAtts.length;
+        const pct = total === 0 ? 0 : Math.round((present / total) * 100);
+        const color = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500';
+        return { name: b.name, percentage: pct, color };
+      });
+      setBranchPresence(branchData);
+
+      // ── Live Logs ──
+      const events: LiveLog[] = [];
+      for (const r of atts) {
+        const empName = `${r.employee?.firstName || ''} ${r.employee?.lastName || ''}`.trim();
+        const isLate = r.lateMinutes > 0;
+        const isUndertime = r.undertimeMinutes > 0;
+
+        if (r.checkInTime) {
+          events.push({
+            label: empName,
+            action: `Checked in · ${isLate ? 'Late' : 'On Time'}`,
+            time: new Date(r.checkInTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+            eventTs: new Date(r.checkInTime).getTime(),
+            eventType: 'check-in',
+            status: isLate ? 'late' : 'on-time',
+          });
+        }
+        if (r.checkOutTime) {
+          events.push({
+            label: empName,
+            action: 'Checked out',
+            time: new Date(r.checkOutTime).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+            eventTs: new Date(r.checkOutTime).getTime(),
+            eventType: 'check-out',
+            status: isUndertime ? 'undertime' : 'on-time',
+          });
+        }
+      }
+
+      events.sort((a, b) => b.eventTs - a.eventTs);
+      setLiveLogs(events.slice(0, 20));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [router]);
+
+  // ── SSE: real-time updates ──
+  const handleStreamRecord = useCallback((payload: AttendanceStreamPayload) => {
+    const emp = payload.record.employee;
+    const empName = emp ? `${emp.firstName} ${emp.lastName}`.trim() : 'Unknown';
+    const isLate = payload.record.lateMinutes > 0;
+    const isUndertime = payload.record.undertimeMinutes > 0;
+
+    const newLog: LiveLog = {
+      label: empName,
+      action: payload.type === 'check-in'
+        ? `Checked in · ${isLate ? 'Late' : 'On Time'}`
+        : 'Checked out',
+      time: new Date(
+        payload.type === 'check-in' ? payload.record.checkInTime : payload.record.checkOutTime!
+      ).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' }),
+      eventTs: new Date(
+        payload.type === 'check-in' ? payload.record.checkInTime : payload.record.checkOutTime!
+      ).getTime(),
+      eventType: payload.type === 'check-in' ? 'check-in' : 'check-out',
+      status: payload.type === 'check-in'
+        ? (isLate ? 'late' : 'on-time')
+        : (isUndertime ? 'undertime' : 'on-time'),
+    };
+
+    setLiveLogs(prev => [newLog, ...prev].slice(0, 20));
+
+    // Increment KPI counters for check-ins only
+    if (payload.type === 'check-in') {
+      if (isLate) {
+        setTotalLate(prev => prev + 1);
+        setStats(prev => prev.map(s => s.label === 'Total Lates' ? { ...s, value: (Number(s.value) + 1) } : s));
+      } else {
+        setTotalOnTime(prev => prev + 1);
+        setStats(prev => prev.map(s => s.label === 'On Time' ? { ...s, value: (Number(s.value) + 1) } : s));
+      }
+      setTotalAbsent(prev => {
+        const newAbsent = Math.max(0, prev - 1);
+        setStats(p => p.map(s => s.label === 'Total Absents' ? { ...s, value: newAbsent } : s));
+        return newAbsent;
+      });
+    }
+  }, []);
+
+  useAttendanceStream({
+    onRecord: handleStreamRecord,
+  });
+
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(r => { if (!r.ok) router.replace('/login') })
+      .catch(() => router.replace('/login'));
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [load]);
 
   const handleBranchClick = (branchName: string) => {
     router.push(`/hr/attendance?branch=${encodeURIComponent(branchName)}`);
   };
 
+  // ── Loading skeleton ──
+  if (loading) return (
+    <div className="flex flex-col gap-3 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)]">
+      <div className="h-7 w-44 animate-pulse bg-slate-200 rounded-lg" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[...Array(4)].map((_, i) => <div key={i} className="h-[68px] rounded-xl animate-pulse bg-slate-200" />)}
+      </div>
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-3 min-h-0">
+        <div className="lg:col-span-2 space-y-3">
+          <div className="h-56 lg:h-48 rounded-xl animate-pulse bg-slate-200" />
+          <div className="h-24 rounded-xl animate-pulse bg-slate-200" />
+        </div>
+        <div className="h-64 lg:h-auto rounded-xl animate-pulse bg-slate-200" />
+      </div>
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => (
+    <div className="flex flex-col gap-2.5 min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)] lg:overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between shrink-0">
+        <div>
+          <h1 className="text-lg lg:text-xl font-black text-slate-900 tracking-tight">HR Overview</h1>
+          <p className="text-slate-500 text-xs font-semibold">
+            {new Date().toLocaleDateString('en-PH', {
+              timeZone: 'Asia/Manila',
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* KPI Stat Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+        {[
+          { label: 'Employees', value: stats.find(s => s.label === 'Total Employees')?.value ?? 0, icon: Users, color: 'text-blue-600', bg: 'bg-blue-50', accent: 'border-blue-100', path: '/hr/employees' },
+          { label: 'On Time', value: stats.find(s => s.label === 'On Time')?.value ?? 0, icon: UserCheck, color: 'text-emerald-600', bg: 'bg-emerald-50', accent: 'border-emerald-100', path: '/hr/attendance?status=Present' },
+          { label: 'Late', value: stats.find(s => s.label === 'Total Lates')?.value ?? 0, icon: Timer, color: 'text-amber-600', bg: 'bg-amber-50', accent: 'border-amber-100', path: '/hr/attendance?status=Late' },
+          { label: 'Absent', value: stats.find(s => s.label === 'Total Absents')?.value ?? 0, icon: UserX, color: 'text-rose-600', bg: 'bg-rose-50', accent: 'border-rose-100', path: '/hr/attendance?status=Absent' },
+        ].map(s => (
           <div
-            key={stat.label}
-            onClick={() => handleStatClick(stat.path)}
-            className="bg-white p-6 rounded-[1rem] border border-slate-200 shadow-sm relative overflow-hidden group hover:border-red-500 transition-all cursor-pointer active:scale-95"
+            key={s.label}
+            onClick={() => router.push(s.path)}
+            className={`bg-white rounded-xl border ${s.accent} shadow-sm px-3 lg:px-4 py-2.5 lg:py-3 flex items-center gap-2.5 cursor-pointer hover:shadow-md transition-all active:scale-95`}
           >
-            <div className={`absolute top-0 right-0 w-24 h-24 ${stat.color} opacity-[0.03] -mr-8 -mt-8 rounded-full group-hover:opacity-[0.08] transition-all`} />
-            <div className="flex items-center justify-between mb-4">
-              <div className={`${stat.color} text-white p-3 rounded-2xl shadow-lg`}>
-                {stat.icon}
-              </div>
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{stat.sub}</span>
+            <div className={`w-8 h-8 lg:w-9 lg:h-9 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
+              <s.icon className={`w-4 h-4 lg:w-[18px] lg:h-[18px] ${s.color}`} />
             </div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{stat.label}</p>
-            <p className="text-4xl font-black text-slate-800 mt-2 tracking-tighter">{stat.value}</p>
+            <div>
+              <p className="text-xl lg:text-2xl font-black text-slate-900 leading-none">{s.value}</p>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">{s.label}</p>
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div
-            onClick={() => router.push('/hr/attendance?status=Present&includeLate=true')}
-            className="bg-white p-8 rounded-[1rem] border border-slate-200 shadow-sm flex flex-col md:flex-row items-center gap-8 cursor-pointer hover:border-emerald-500 transition-all group active:scale-[0.99]"
-          >
-            <div className="relative shrink-0">
-              <div className="w-32 h-32 rounded-full border-[12px] border-slate-100 flex items-center justify-center relative">
-                <div className="absolute inset-0 rounded-full border-[12px] border-emerald-500 border-t-transparent -rotate-45" />
-                <p className="text-2xl font-black text-slate-800">92%</p>
-              </div>
+      {/* Main content */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-2.5 min-h-0">
+        <div className="lg:col-span-2 flex flex-col gap-2.5 min-h-0">
+          {/* Weekly Attendance Chart */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm flex flex-col min-h-[260px] lg:min-h-0 lg:flex-1">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <CalendarDays className="w-3.5 h-3.5 text-red-500" /> Weekly Attendance
+              </h2>
+              <span className="text-xs text-slate-500 font-bold">Mon – Fri</span>
             </div>
-            <div className="flex-1 space-y-4 text-center md:text-left">
-              <div>
-                <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Today's Punctuality</h3>
-                <p className="text-sm text-slate-400 font-medium tracking-tight leading-relaxed">
-                  An overview of workforce clock-in trends and biometric compliance for the current shift.
-                </p>
-              </div>
-            </div>
-            <div className="hidden xl:block">
-              <Fingerprint size={48} className="text-slate-100 group-hover:text-emerald-50 transition-colors" />
+            <div className="flex-1 min-h-0 p-3">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weeklyData} barGap={2} barCategoryGap="20%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="day" tick={{ fontSize: 11, fontWeight: 700, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fontWeight: 600, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={32} />
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(0,0,0,0.03)', radius: 4 }} />
+                  <Bar dataKey="present" fill="#10b981" radius={[4, 4, 0, 0]} name="Present">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === dayNames[new Date().getDay()] ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="late" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Late">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === dayNames[new Date().getDay()] ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="absent" fill="#f43f5e" radius={[4, 4, 0, 0]} name="Absent">
+                    {weeklyData.map((entry, i) => (
+                      <Cell key={i} opacity={entry.day === dayNames[new Date().getDay()] ? 1 : 0.7} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {branchPresence.map((branch) => (
-              <div
-                key={branch.name}
-                onClick={() => handleBranchClick(branch.name)}
-                className="bg-slate-900 p-6 rounded-[2.5rem] text-white flex flex-col justify-between h-44 shadow-xl cursor-pointer hover:scale-[1.02] transition-transform active:scale-95"
-              >
-                <div className="flex justify-between items-center">
-                  <div className="p-2.5 bg-white/10 rounded-2xl">
-                    <MapPin size={18} className="text-red-400" />
-                  </div>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] mb-1">{branch.name}</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-black tracking-tighter">{branch.percentage}%</span>
-                    <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Present</span>
-                  </div>
-                </div>
-                <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                  <div className={`h-full transition-all duration-1000 ${branch.color}`} style={{ width: `${branch.percentage}%` }} />
-                </div>
+          {/* Branch Presence */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm shrink-0">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-red-500" /> Branch Presence
+              </h2>
+              {/* 
+              <div className="flex gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  {branchPresence.filter(b => b.percentage >= 50).length} active
+                </span>
+                <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-rose-500 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                  {branchPresence.filter(b => b.percentage < 50).length} low
+                </span>
               </div>
-            ))}
+              */}
+            </div>
+            <div className="p-2">
+              {branchPresence.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-4 gap-1.5">
+                  <MapPin className="w-6 h-6 text-slate-200" />
+                  <p className="text-slate-400 text-sm font-semibold">No branches configured</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {branchPresence.map(branch => (
+                    <div
+                      key={branch.name}
+                      onClick={() => handleBranchClick(branch.name)}
+                      className={`rounded-lg border p-2 flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity ${branch.percentage >= 80
+                          ? 'border-emerald-100 bg-emerald-50/30'
+                          : branch.percentage >= 50
+                            ? 'border-amber-100 bg-amber-50/30'
+                            : 'border-rose-100 bg-rose-50/30'
+                        }`}
+                    >
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${branch.percentage >= 80 ? 'bg-emerald-100'
+                          : branch.percentage >= 50 ? 'bg-amber-100'
+                            : 'bg-rose-100'
+                        }`}>
+                        <MapPin className={`w-3.5 h-3.5 ${branch.percentage >= 80 ? 'text-emerald-600'
+                            : branch.percentage >= 50 ? 'text-amber-500'
+                              : 'text-rose-500'
+                          }`} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-slate-800 truncate leading-tight">{branch.name}</p>
+                        <p className="text-[10px] text-slate-500 font-mono">{branch.percentage}% present</p>
+                      </div>
+                      {branch.percentage >= 80
+                        ? <ArrowUpRight className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        : branch.percentage >= 50
+                          ? <ArrowDownRight className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          : <ArrowDownRight className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      }
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-[3rem] border border-slate-200 shadow-sm p-6 flex flex-col">
-          <div className="flex items-center gap-2 mb-6">
-            <Zap size={18} className="text-amber-500 fill-amber-500" />
-            <h3 className="font-black text-[10px] text-slate-800 uppercase tracking-[0.2em]">Live Logs</h3>
-          </div>
-
-          <div className="space-y-4 flex-1 overflow-hidden">
-            {[
-              { label: "Mark Anthony", action: "Clocked In", time: "2m ago" },
-              { label: "Scanner 02", action: "System Sync", time: "15m ago" },
-              { label: "Sarah Jenkins", action: "Clocked Out", time: "1h ago" },
-            ].map((item, i) => (
-              <div key={i} className="flex gap-4 items-start p-3 hover:bg-slate-50 rounded-2xl transition-colors">
-                <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200 font-black text-xs text-slate-400 uppercase">
-                  {item.label.charAt(0)}
+        {/* Activity Feed */}
+        <div className="flex flex-col min-h-0">
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm flex flex-col min-h-[280px] lg:min-h-0 lg:flex-1 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
+              <h2 className="text-xs font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-red-500" /> Activity
+              </h2>
+              <button
+                onClick={() => router.push('/hr/attendance')}
+                className="flex items-center gap-0.5 text-xs font-black text-red-600 hover:text-red-700 uppercase tracking-wider transition-colors"
+              >
+                All <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {liveLogs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 px-6 py-8 lg:py-0">
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 bg-slate-100 rounded-full" />
+                    <div className="absolute inset-2 bg-slate-50 rounded-full flex items-center justify-center">
+                      <Clock className="w-6 h-6 text-slate-300" />
+                    </div>
+                    <div className="absolute -right-1 -top-1 w-5 h-5 bg-red-50 rounded-full flex items-center justify-center border-2 border-white">
+                      <Activity className="w-2.5 h-2.5 text-red-400" />
+                    </div>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-slate-500 font-bold text-sm">No activity yet today</p>
+                    <p className="text-slate-400 text-xs mt-0.5 leading-relaxed">Check-ins will appear here as employees scan</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-black text-slate-800 uppercase tracking-tighter leading-none">{item.label}</p>
-                  <p className="text-[10px] text-slate-400 font-bold mt-1">{item.action}</p>
-                  <p className="text-[9px] text-slate-300 font-medium uppercase mt-0.5">{item.time}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ) : (
+                <div className="divide-y divide-slate-50">
+                  {liveLogs.map((item, i) => {
+                    const isCheckIn = item.eventType === 'check-in'
+                    const initials = item.label.trim().split(' ').filter(Boolean)
+                      .reduce((acc: string, part: string, idx: number, arr: string[]) =>
+                        idx === 0 || idx === arr.length - 1 ? acc + part[0].toUpperCase() : acc, '')
+                    return (
+                      <div key={i} className="flex items-center gap-3 px-3 lg:px-4 py-2.5 hover:bg-slate-50/70 transition-colors">
 
-          <div className="mt-6 p-4 bg-emerald-50 rounded-3xl border border-emerald-100 flex items-center gap-3">
-            <ShieldCheck size={20} className="text-emerald-500" />
-            <p className="text-[9px] text-emerald-700 font-black uppercase leading-tight tracking-wider">
-              Secure Connection Active
-            </p>
+                        {/* Avatar */}
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isCheckIn
+                            ? 'bg-gradient-to-br from-emerald-400 to-emerald-600'
+                            : 'bg-gradient-to-br from-slate-300 to-slate-500'
+                          }`}>
+                          <span className="text-white text-[10px] font-black">{initials}</span>
+                        </div>
+
+                        {/* Name + dept subtitle */}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-800 text-xs leading-tight truncate">{item.label}</p>
+                          <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                            {isCheckIn ? 'Check-in' : 'Check-out'}
+                          </p>
+                        </div>
+
+                        {/* Middle: icon + time */}
+                        <div className="shrink-0 text-right hidden sm:block">
+                          <div className="flex items-center gap-1 justify-end">
+                            {isCheckIn
+                              ? <LogIn className="w-2.5 h-2.5 text-emerald-500" />
+                              : <LogOut className="w-2.5 h-2.5 text-slate-400" />
+                            }
+                            <span className="text-[10px] font-mono text-slate-600">{item.time}</span>
+                          </div>
+                        </div>
+
+                        {/* Right: event type badge + status badge */}
+                        <div className="flex flex-col items-end gap-0.5 shrink-0">
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${isCheckIn ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-500'
+                            }`}>
+                            {isCheckIn ? 'Check-in' : 'Check-out'}
+                          </span>
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full ${item.status === 'on-time' ? 'bg-emerald-50 text-emerald-700'
+                              : item.status === 'late' ? 'bg-amber-50 text-amber-700'
+                                : item.status === 'undertime' ? 'bg-orange-50 text-orange-700'
+                                  : 'bg-slate-50 text-slate-500'
+                            }`}>
+                            {item.status === 'on-time' ? 'On Time'
+                              : item.status === 'late' ? 'Late'
+                                : item.status === 'undertime' ? 'Undertime'
+                                  : 'On Time'}
+                          </span>
+                        </div>
+
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

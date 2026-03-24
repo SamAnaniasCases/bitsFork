@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Search, Plus, Edit2, ChevronLeft, ChevronRight, Upload, AlertTriangle, AlertCircle, X as XIcon, Fingerprint, CheckCircle2, WifiOff, Timer, Loader2 } from 'lucide-react'
 import { departmentsApi, branchesApi } from '@/lib/api'
 import type { Department, Branch } from '@/lib/api'
+import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll'
 
 type Employee = {
   id: number
@@ -76,6 +77,7 @@ function formatPhoneNumber(value: string | null) {
 }
 
 export default function EmployeesPage() {
+  const dragScrollRef = useHorizontalDragScroll()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -578,7 +580,7 @@ export default function EmployeesPage() {
           {/* Import Excel Button */}
           <Dialog open={isImportOpen} onOpenChange={(open) => { setIsImportOpen(open); if (!open) { setImportFile(null); } }}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="flex-1 sm:flex-none border-border text-foreground hover:bg-secondary gap-2">
+              <Button variant="outline" className="flex-1 sm:flex-none border-border text-foreground hover:bg-red-700 gap-2">
                 <Upload className="w-4 h-4" />
                 <span className="hidden xs:inline">Import</span> Excel
               </Button>
@@ -840,162 +842,161 @@ export default function EmployeesPage() {
 
       {/* Employees Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm min-w-[900px]">
-          <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
-            <tr>
-              <th className="px-4 py-4 w-20">ZK ID</th>
-              <th className="px-6 py-4">Employee</th>
-              <th className="px-4 py-4">Employee ID</th>
-              <th className="px-4 py-4">Enrolled On</th>
-              <th className="px-6 py-4">Department</th>
-              <th className="px-6 py-4">Shift</th>
-              <th className="px-6 py-4">Branch</th>
-              <th className="px-6 py-4">Contact</th>
-              <th className="px-6 py-4">Joined</th>
-              <th className="px-6 py-4">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading ? (
+        <div ref={dragScrollRef} className="overflow-x-auto scrollbar-hide">
+          <table className="w-full text-left text-sm min-w-[900px]">
+            <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
               <tr>
-                <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold text-xs">
-                  Loading employees...
-                </td>
+                <th className="px-4 py-4 w-20">ZK ID</th>
+                <th className="px-6 py-4">Employee</th>
+                <th className="px-4 py-4">Employee ID</th>
+                <th className="px-4 py-4">Enrolled On</th>
+                <th className="px-6 py-4">Department</th>
+                <th className="px-6 py-4">Shift</th>
+                <th className="px-6 py-4">Branch</th>
+                <th className="px-6 py-4">Contact</th>
+                <th className="px-6 py-4">Joined</th>
+                <th className="px-6 py-4">Actions</th>
               </tr>
-            ) : paginatedEmployees.length > 0 ? (
-              paginatedEmployees.map((employee, index) => (
-                <tr key={employee.id} className="hover:bg-red-50/50 transition-colors duration-200 group">
-                  {/* ZK ID - first column */}
-                  <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
-                    {employee.zkId ?? '—'}
-                  </td>
-                  <td className="px-6 py-4">
-                    <p className="font-bold text-slate-700">{employee.firstName} {employee.lastName}</p>
-                    <p className="text-xs text-slate-400">{employee.email || '—'}</p>
-                  </td>
-                  {/* Employee ID (employeeNumber field) */}
-                  <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
-                    {employee.employeeNumber ?? '—'}
-                  </td>
-                  {/* Fingerprint Enrollment Badges */}
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {employee.EmployeeDeviceEnrollment && employee.EmployeeDeviceEnrollment.length > 0 ? (
-                        employee.EmployeeDeviceEnrollment.map(enrollment => (
-                          <span
-                            key={enrollment.device.id}
-                            title={`Enrolled on ${new Date(enrollment.enrolledAt).toLocaleDateString()}`}
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                              enrollment.device.isActive
-                                ? 'bg-green-100 text-green-700 border border-green-200'
-                                : 'bg-gray-100 text-gray-500 border border-gray-200'
-                            }`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${enrollment.device.isActive ? 'bg-green-500' : 'bg-gray-400'}`} />
-                            {enrollment.device.name}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground italic">Not enrolled</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 max-w-[120px]">
-                    <span className="text-xs font-medium text-slate-500 block truncate" title={employee.Department?.name || employee.department || undefined}>
-                      {employee.Department?.name || employee.department || '—'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    {employee.Shift ? (
-                      <div>
-                        <p className="text-xs font-bold text-slate-700 leading-tight">{employee.Shift.name}</p>
-                        <p className="text-[10px] font-medium text-slate-400 mt-0.5">{formatTime(employee.Shift.startTime)} – {formatTime(employee.Shift.endTime)}</p>
-                      </div>
-                    ) : (
-                      <span className="text-[10px] text-slate-300 font-bold">Unassigned</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">{employee.branch || '—'}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">{employee.contactNumber ? formatPhoneNumber(employee.contactNumber) : '—'}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-xs font-medium text-slate-500">
-                      {employee.hireDate ? new Date(employee.hireDate).toLocaleDateString('en-CA') : '—'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-1">
-                      {/* Edit */}
-                      <button
-                        onClick={() => handleEdit(employee)}
-                        className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all active:scale-90"
-                        title="Edit employee"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-
-                      {/* Fingerprint Enrollment */}
-                      {(() => {
-                        const status = enrollStatus[employee.id] || 'idle'
-                        const msg = enrollMsg[employee.id] || ''
-                        if (status === 'loading') {
-                          return (
-                            <button disabled className="p-2.5 rounded-xl bg-blue-50 text-blue-400 cursor-wait" title="Enrolling...">
-                              <Fingerprint className="w-4 h-4 animate-pulse" />
-                            </button>
-                          )
-                        }
-                        if (status === 'success') {
-                          return (
-                            <div className="flex items-center gap-1">
-                              <span className="p-2.5 rounded-xl bg-green-50 text-green-500">
-                                <CheckCircle2 className="w-4 h-4" />
-                              </span>
-                              <span className="text-[10px] text-green-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
-                            </div>
-                          )
-                        }
-                        if (status === 'error') {
-                          return (
-                            <div className="flex items-center gap-1">
-                              <span className="p-2.5 rounded-xl bg-amber-50 text-amber-500">
-                                <WifiOff className="w-4 h-4" />
-                              </span>
-                              <span className="text-[10px] text-amber-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
-                            </div>
-                          )
-                        }
-                        return (
-                          <button
-                            onClick={() => {
-                              const emp = employees.find(e => e.id === employee.id)
-                              const name = emp ? `${emp.firstName} ${emp.lastName}` : 'this employee'
-                              setEnrollConfirmModal({ open: true, employeeId: employee.id, employeeName: name })
-                            }}
-                            className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-xl transition-all active:scale-90"
-                            title="Enroll Fingerprint"
-                          >
-                            <Fingerprint className="w-4 h-4" />
-                          </button>
-                        )
-                      })()}
-                    </div>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr>
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold text-xs">
+                    Loading employees...
                   </td>
                 </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={10} className="px-6 py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">
-                  No matching employees found
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              ) : paginatedEmployees.length > 0 ? (
+                paginatedEmployees.map((employee, index) => (
+                  <tr key={employee.id} className="hover:bg-red-50/50 transition-colors duration-200 group">
+                    {/* ZK ID - first column */}
+                    <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
+                      {employee.zkId ?? '—'}
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-slate-700">{employee.firstName} {employee.lastName}</p>
+                      <p className="text-xs text-slate-400">{employee.email || '—'}</p>
+                    </td>
+                    {/* Employee ID (employeeNumber field) */}
+                    <td className="px-4 py-3 text-xs text-muted-foreground font-mono">
+                      {employee.employeeNumber ?? '—'}
+                    </td>
+                    {/* Fingerprint Enrollment Badges */}
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {employee.EmployeeDeviceEnrollment && employee.EmployeeDeviceEnrollment.length > 0 ? (
+                          employee.EmployeeDeviceEnrollment.map(enrollment => (
+                            <span
+                              key={enrollment.device.id}
+                              title={`Enrolled on ${new Date(enrollment.enrolledAt).toLocaleDateString()}`}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${enrollment.device.isActive
+                                ? 'bg-green-100 text-green-700 border border-green-200'
+                                : 'bg-gray-100 text-gray-500 border border-gray-200'
+                                }`}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full ${enrollment.device.isActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+                              {enrollment.device.name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground italic">Not enrolled</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 max-w-[120px]">
+                      <span className="text-xs font-medium text-slate-500 block truncate" title={employee.Department?.name || employee.department || undefined}>
+                        {employee.Department?.name || employee.department || '—'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {employee.Shift ? (
+                        <div>
+                          <p className="text-xs font-bold text-slate-700 leading-tight">{employee.Shift.name}</p>
+                          <p className="text-[10px] font-medium text-slate-400 mt-0.5">{formatTime(employee.Shift.startTime)} – {formatTime(employee.Shift.endTime)}</p>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-300 font-bold">Unassigned</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-xs font-medium text-slate-500">{employee.branch || '—'}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-xs font-medium text-slate-500">{employee.contactNumber ? formatPhoneNumber(employee.contactNumber) : '—'}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-xs font-medium text-slate-500">
+                        {employee.hireDate ? new Date(employee.hireDate).toLocaleDateString('en-CA') : '—'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-1">
+                        {/* Edit */}
+                        <button
+                          onClick={() => handleEdit(employee)}
+                          className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all active:scale-90"
+                          title="Edit employee"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+
+                        {/* Fingerprint Enrollment */}
+                        {(() => {
+                          const status = enrollStatus[employee.id] || 'idle'
+                          const msg = enrollMsg[employee.id] || ''
+                          if (status === 'loading') {
+                            return (
+                              <button disabled className="p-2.5 rounded-xl bg-blue-50 text-blue-400 cursor-wait" title="Enrolling...">
+                                <Fingerprint className="w-4 h-4 animate-pulse" />
+                              </button>
+                            )
+                          }
+                          if (status === 'success') {
+                            return (
+                              <div className="flex items-center gap-1">
+                                <span className="p-2.5 rounded-xl bg-green-50 text-green-500">
+                                  <CheckCircle2 className="w-4 h-4" />
+                                </span>
+                                <span className="text-[10px] text-green-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
+                              </div>
+                            )
+                          }
+                          if (status === 'error') {
+                            return (
+                              <div className="flex items-center gap-1">
+                                <span className="p-2.5 rounded-xl bg-amber-50 text-amber-500">
+                                  <WifiOff className="w-4 h-4" />
+                                </span>
+                                <span className="text-[10px] text-amber-600 font-semibold max-w-[90px] leading-tight">{msg}</span>
+                              </div>
+                            )
+                          }
+                          return (
+                            <button
+                              onClick={() => {
+                                const emp = employees.find(e => e.id === employee.id)
+                                const name = emp ? `${emp.firstName} ${emp.lastName}` : 'this employee'
+                                setEnrollConfirmModal({ open: true, employeeId: employee.id, employeeName: name })
+                              }}
+                              className="p-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-xl transition-all active:scale-90"
+                              title="Enroll Fingerprint"
+                            >
+                              <Fingerprint className="w-4 h-4" />
+                            </button>
+                          )
+                        })()}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={10} className="px-6 py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">
+                    No matching employees found
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
 
         {/* Pagination */}
@@ -1209,11 +1210,10 @@ export default function EmployeesPage() {
                     <button
                       key={device.id}
                       onClick={() => setSelectedDeviceId(device.id)}
-                      className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-colors text-left ${
-                        selectedDeviceId === device.id
-                          ? 'border-red-500 bg-red-50'
-                          : 'border-slate-200 hover:bg-slate-50'
-                      }`}
+                      className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-colors text-left ${selectedDeviceId === device.id
+                        ? 'border-red-500 bg-red-50'
+                        : 'border-slate-200 hover:bg-slate-50'
+                        }`}
                     >
                       <div className={`w-2 h-2 rounded-full shrink-0 ${device.isActive ? 'bg-green-500' : 'bg-slate-300'}`} />
                       <div className="min-w-0 flex-1">

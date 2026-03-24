@@ -210,20 +210,20 @@ export default function DevicesPage() {
         <div className="space-y-6">
 
             {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
                         <RadioTower className="w-5 h-5 text-primary" />
                     </div>
                     <div>
-                        <h2 className="text-2xl font-bold text-foreground">Biometric Devices</h2>
-                        <p className="text-sm text-muted-foreground mt-0.5">Manage ZKTeco device configurations</p>
+                        <h2 className="text-xl sm:text-2xl font-bold text-foreground">Biometric Devices</h2>
+                        <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">Manage ZKTeco device configurations</p>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 self-end sm:self-center">
                     <Button variant="outline" size="sm" onClick={fetchDevices} className="gap-2 border-border">
                         <RefreshCw className="w-4 h-4" />
-                        Refresh
+                        <span className="hidden sm:inline">Refresh</span>
                     </Button>
                     <Button onClick={openAdd} className="bg-primary hover:bg-primary/90 gap-2">
                         <Plus className="w-4 h-4" />
@@ -265,7 +265,7 @@ export default function DevicesPage() {
                     </div>
                 </Card>
             ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                     {devices.map(device => {
                         const testResult = testResults[device.id]
                         const isTesting = testingId === device.id

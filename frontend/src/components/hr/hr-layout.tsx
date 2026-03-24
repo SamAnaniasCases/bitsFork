@@ -9,29 +9,30 @@ export function HRLayout({ children }: { children: React.ReactNode }) {
     const [isCollapsed, setIsCollapsed] = useState(false)
 
     return (
-        <div className="relative min-h-screen bg-slate-50 flex flex-col">
+        <div className="h-screen bg-slate-50 overflow-hidden relative">
 
             <header className="fixed top-0 left-0 right-0 z-[100] h-16">
                 <TopBar setIsMobileOpen={setIsMobileOpen} />
             </header>
 
-            <div className="flex flex-1 pt-16">
-                <Sidebar
-                    isMobileOpen={isMobileOpen}
-                    setIsMobileOpen={setIsMobileOpen}
-                    isCollapsed={isCollapsed}
-                    setIsCollapsed={setIsCollapsed}
+            {/* Mobile Overlay */}
+            {isMobileOpen && (
+                <div
+                    className="fixed inset-0 bg-slate-900/50 z-40 lg:hidden transition-opacity"
+                    onClick={() => setIsMobileOpen(false)}
                 />
+            )}
 
-                <main
-                    className={`flex-1 min-w-0 transition-all duration-300 p-6 
-                    ${isCollapsed ? 'lg:ml-24' : 'lg:ml-64'} 
-                    ml-0`}
-                >
+            <Sidebar
+                isMobileOpen={isMobileOpen}
+                setIsMobileOpen={setIsMobileOpen}
+                isCollapsed={isCollapsed}
+                setIsCollapsed={setIsCollapsed}
+            />
 
-                    <div className="w-full h-full relative">
-                        {children}
-                    </div>
+            <div className={`h-[calc(100vh-4rem)] mt-16 transition-all duration-300 ${isCollapsed ? 'lg:ml-24' : 'lg:ml-68'}`}>
+                <main className="h-full overflow-y-auto scrollbar-hide p-4 md:p-8">
+                    {children}
                 </main>
             </div>
         </div>

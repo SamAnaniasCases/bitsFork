@@ -85,7 +85,7 @@ export function AdminSidebar({ isOpen, isCollapsed, onClose, onToggleCollapse }:
 
   return (
     <aside className={`
-      fixed top-24 bottom-4 left-4 z-[60] bg-[#E60000] flex flex-col transition-all duration-300 ease-in-out overflow-hidden
+      fixed top-24 bottom-4 left-4 z-[60] bg-[#E60000] flex flex-col transition-all duration-300 ease-in-out overflow-y-auto overflow-x-hidden scrollbar-hide
       rounded-[20px]
       ${isOpen ? 'translate-x-0' : '-translate-x-[120%]'}
       w-72 lg:translate-x-0
@@ -122,7 +122,7 @@ export function AdminSidebar({ isOpen, isCollapsed, onClose, onToggleCollapse }:
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 mt-2 relative flex flex-col h-full">
+      <nav className="flex-1 mt-2 relative flex flex-col min-h-0">
         <ul ref={listRef} className="relative">
 
           {/* Sliding indicator */}

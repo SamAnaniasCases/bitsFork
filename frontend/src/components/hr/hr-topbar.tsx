@@ -57,6 +57,7 @@ export default function TopBar({ setIsMobileOpen }: { setIsMobileOpen: (val: boo
             <Image src="/images/av.jpg" alt="Logo" fill className="object-contain" priority quality={100} />
           </div>
           <h1 className="text-[#E60000] font-black text-2xl tracking-tighter uppercase whitespace-nowrap">BITS</h1>
+          <span className="hidden md:inline text-gray-400 text-xs font-semibold tracking-wide whitespace-nowrap border-l border-gray-200 pl-3 ml-1">Biometric Integrated Timekeeping System</span>
         </div>
       </div>
 
