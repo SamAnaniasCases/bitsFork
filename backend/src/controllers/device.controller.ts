@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import { ZKDriver } from '../lib/zk-driver';
 import { forceReleaseLock } from '../services/zkServices';
 import deviceEmitter from '../lib/deviceEmitter';
+import { audit } from '../lib/auditLogger';
 
 /** Unwrap node-zklib's ZKError: { err: Error, ip, command } → readable string */
 function zkErrMsg(err: any): string {
@@ -55,6 +56,16 @@ export const createDevice = async (req: Request, res: Response) => {
         });
 
         console.log(`[Devices] Created device "${device.name}" (${device.ip}:${device.port})`);
+
+        await audit({
+            action: 'CREATE',
+            entityType: 'Device',
+            entityId: device.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Added new device "${device.name}" (${device.ip})`
+        });
+
         res.status(201).json({ success: true, message: `Device "${device.name}" added successfully`, device });
     } catch (error: any) {
         console.error('[Devices] Error creating device:', error);
@@ -93,7 +104,24 @@ export const updateDevice = async (req: Request, res: Response) => {
             }
         });
 
+        const changes: string[] = [];
+        if (existing.name !== device.name) changes.push(`Updated name from "${existing.name}" to "${device.name}"`);
+        if (existing.ip !== device.ip) changes.push(`Updated IP from "${existing.ip}" to "${device.ip}"`);
+        if (existing.port !== device.port) changes.push(`Updated port from "${existing.port}" to "${device.port}"`);
+        if (existing.location !== device.location) changes.push(`Updated location from "${existing.location || 'empty'}" to "${device.location || 'empty'}"`);
+
         console.log(`[Devices] Updated device ID ${id}: "${device.name}" (${device.ip}:${device.port})`);
+
+        await audit({
+            action: 'UPDATE',
+            entityType: 'Device',
+            entityId: device.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Updated device "${device.name}" (${device.ip})`,
+            metadata: changes.length > 0 ? { updates: changes } : undefined
+        });
+
         res.json({ success: true, message: `Device "${device.name}" updated. Please test the connection.`, device });
     } catch (error: any) {
         console.error('[Devices] Error updating device:', error);
@@ -112,6 +140,15 @@ export const deleteDevice = async (req: Request, res: Response) => {
         }
 
         await prisma.device.delete({ where: { id } });
+
+        await audit({
+            action: 'DELETE',
+            entityType: 'Device',
+            entityId: id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Removed device "${existing.name}"`
+        });
 
         console.log(`[Devices] Deleted device ID ${id}: "${existing.name}"`);
         res.json({ success: true, message: `Device "${existing.name}" removed successfully` });
@@ -270,6 +307,18 @@ export const reconcileDevice = async (req: Request, res: Response) => {
         const { reconcileDeviceWithDB } = await import('../services/zkServices');
         const report = await reconcileDeviceWithDB(id, dryRun);
         const mode = dryRun ? 'Preview (dry run)' : 'Reconcile complete';
+
+        if (!dryRun) {
+            await audit({
+                action: 'SYNC',
+                entityType: 'Device',
+                entityId: id,
+                performedBy: req.user?.employeeId,
+                source: 'admin-panel',
+                details: `Reconciled device: pushed ${report.pushed.length}, removed ${report.deleted.length}`
+            });
+        }
+
         return res.json({
             success: true,
             message: `${mode}: ${report.pushed.length} to push, ${report.deleted.length} to remove, ${report.needsEnrollment.length} need enrollment.`,
@@ -303,6 +352,16 @@ export const toggleDevice = async (req: Request, res: Response) => {
 
         const state = updated.syncEnabled ? 'enabled' : 'disabled';
         console.log(`[Devices] Sync ${state} for "${updated.name}" (${updated.ip})`);
+
+        await audit({
+            action: 'STATUS_CHANGE',
+            entityType: 'Device',
+            entityId: updated.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Device sync was ${state}`
+        });
+
         return res.json({ success: true, message: `Sync ${state} for "${updated.name}"`, device: updated });
     } catch (error: any) {
         console.error(`[Devices] Toggle failed for device ${id}:`, error);

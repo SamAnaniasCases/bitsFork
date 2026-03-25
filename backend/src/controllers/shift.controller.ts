@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { audit } from '../lib/auditLogger';
 
 // GET /api/shifts - Get all shifts
 export const getAllShifts = async (req: Request, res: Response) => {
@@ -39,7 +40,7 @@ export const getShiftById = async (req: Request, res: Response) => {
 // POST /api/shifts - Create a shift
 export const createShift = async (req: Request, res: Response) => {
     try {
-        const { shiftCode, name, startTime, endTime, graceMinutes, breakMinutes, isNightShift, description, workDays, halfDays } = req.body;
+        const { shiftCode, name, startTime, endTime, graceMinutes, breakMinutes, isNightShift, description, workDays, halfDays, breaks } = req.body;
 
         if (!shiftCode?.trim() || !name?.trim() || !startTime?.trim() || !endTime?.trim()) {
             return res.status(400).json({
@@ -72,7 +73,17 @@ export const createShift = async (req: Request, res: Response) => {
                 description: description?.trim() || null,
                 workDays: Array.isArray(workDays) ? JSON.stringify(workDays) : '["Mon","Tue","Wed","Thu","Fri"]',
                 halfDays: Array.isArray(halfDays) ? JSON.stringify(halfDays) : '[]',
+                breaks: Array.isArray(breaks) ? JSON.stringify(breaks) : '[]',
             }
+        });
+
+        await audit({
+            action: 'CREATE',
+            entityType: 'Shift',
+            entityId: shift.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Created new shift "${shift.name}" (${shift.shiftCode})`
         });
 
         res.status(201).json({ success: true, shift });
@@ -91,7 +102,7 @@ export const updateShift = async (req: Request, res: Response) => {
         const existing = await prisma.shift.findUnique({ where: { id } });
         if (!existing) return res.status(404).json({ success: false, message: 'Shift not found' });
 
-        const { shiftCode, name, startTime, endTime, graceMinutes, breakMinutes, isNightShift, isActive, description, workDays, halfDays } = req.body;
+        const { shiftCode, name, startTime, endTime, graceMinutes, breakMinutes, isNightShift, isActive, description, workDays, halfDays, breaks } = req.body;
 
         const timeRegex = /^([01]?\d|2[0-3]):([0-5]\d)$/;
         if (startTime && !timeRegex.test(startTime)) return res.status(400).json({ success: false, message: 'startTime must be H:MM or HH:MM (24-hour)' });
@@ -107,21 +118,46 @@ export const updateShift = async (req: Request, res: Response) => {
             if (dup) return res.status(409).json({ success: false, message: 'Shift name already in use' });
         }
 
+        const updateData: any = {
+            ...(shiftCode && { shiftCode: shiftCode.trim().toUpperCase() }),
+            ...(name && { name: name.trim() }),
+            ...(startTime && { startTime: startTime.trim() }),
+            ...(endTime && { endTime: endTime.trim() }),
+            ...(graceMinutes != null && { graceMinutes: parseInt(graceMinutes) }),
+            ...(breakMinutes != null && { breakMinutes: parseInt(breakMinutes) }),
+            ...(isNightShift != null && { isNightShift: isNightShift === true || isNightShift === 'true' }),
+            ...(isActive != null && { isActive: isActive === true || isActive === 'true' }),
+            ...(description !== undefined && { description: description?.trim() || null }),
+            ...(workDays !== undefined && { workDays: Array.isArray(workDays) ? JSON.stringify(workDays) : workDays }),
+            ...(halfDays !== undefined && { halfDays: Array.isArray(halfDays) ? JSON.stringify(halfDays) : halfDays }),
+            ...(breaks !== undefined && { breaks: Array.isArray(breaks) ? JSON.stringify(breaks) : breaks }),
+        };
+
         const shift = await prisma.shift.update({
             where: { id },
-            data: {
-                ...(shiftCode && { shiftCode: shiftCode.trim().toUpperCase() }),
-                ...(name && { name: name.trim() }),
-                ...(startTime && { startTime: startTime.trim() }),
-                ...(endTime && { endTime: endTime.trim() }),
-                ...(graceMinutes != null && { graceMinutes: parseInt(graceMinutes) }),
-                ...(breakMinutes != null && { breakMinutes: parseInt(breakMinutes) }),
-                ...(isNightShift != null && { isNightShift: isNightShift === true || isNightShift === 'true' }),
-                ...(isActive != null && { isActive: isActive === true || isActive === 'true' }),
-                ...(description !== undefined && { description: description?.trim() || null }),
-                ...(workDays !== undefined && { workDays: Array.isArray(workDays) ? JSON.stringify(workDays) : workDays }),
-                ...(halfDays !== undefined && { halfDays: Array.isArray(halfDays) ? JSON.stringify(halfDays) : halfDays }),
+            data: updateData
+        });
+
+        const changes: string[] = [];
+        for (const [key, newValue] of Object.entries(updateData)) {
+            const oldValue = (existing as any)[key];
+            if (oldValue !== newValue) {
+                const oldValStr = oldValue || 'empty';
+                const newValStr = newValue || 'empty';
+                if (oldValStr !== newValStr) {
+                    changes.push(`Updated ${key.replace(/([A-Z])/g, ' $1').toLowerCase().trim()} from "${oldValStr}" to "${newValStr}"`);
+                }
             }
+        }
+
+        await audit({
+            action: 'UPDATE',
+            entityType: 'Shift',
+            entityId: shift.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Updated shift "${shift.name}" (${shift.shiftCode})`,
+            metadata: changes.length > 0 ? { updates: changes } : undefined
         });
 
         res.json({ success: true, shift });
@@ -143,6 +179,15 @@ export const toggleShift = async (req: Request, res: Response) => {
         const shift = await prisma.shift.update({
             where: { id },
             data: { isActive: !existing.isActive }
+        });
+
+        await audit({
+            action: 'STATUS_CHANGE',
+            entityType: 'Shift',
+            entityId: shift.id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Shift "${shift.name}" was ${shift.isActive ? 'activated' : 'deactivated'}`
         });
 
         res.json({ success: true, shift, message: `Shift ${shift.isActive ? 'activated' : 'deactivated'}` });
@@ -172,6 +217,16 @@ export const deleteShift = async (req: Request, res: Response) => {
         }
 
         await prisma.shift.delete({ where: { id } });
+
+        await audit({
+            action: 'DELETE',
+            entityType: 'Shift',
+            entityId: id,
+            performedBy: req.user?.employeeId,
+            source: 'admin-panel',
+            details: `Deleted shift "${existing.name}"`
+        });
+
         res.json({ success: true, message: `Shift "${existing.name}" deleted` });
     } catch (error: any) {
         console.error('Error deleting shift:', error);

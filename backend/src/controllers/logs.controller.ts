@@ -39,7 +39,7 @@ interface LogEntry {
  * Query params:
  *   startDate  - YYYY-MM-DD (PHT)
  *   endDate    - YYYY-MM-DD (PHT)
- *   type       - 'all' | 'timekeeping' | 'system'   (default: 'all')
+ *   type       - 'all' | 'timekeeping' | 'system'   (will be expanded later, but keep these for now to not break existing frontend)
  *   page       - number (default: 1)
  *   limit      - number (default: 30)
  */
@@ -64,155 +64,76 @@ export const getLogs = async (req: Request, res: Response) => {
             ? phtDateToUTCRange(endDate).end
             : new Date();
 
-        // ── 1. Always compute accurate counts (independent of type filter) ────
-        //    We use cheap COUNT queries so the tab badges are always correct
-        //    regardless of which tab is active.
+        // 1. Build the where clause
+        const baseWhere: any = {
+            timestamp: { gte: startUTC, lte: endUTC },
+        };
 
-        // Timekeeping count = Attendance rows × up to 2 events each
-        const attCount = await prisma.attendance.count({
-            where: { date: { gte: startUTC, lte: endUTC } },
-        });
-        // We need the actual expanded count (check-ins + check-outs)
-        const attsForCount = await prisma.attendance.count({
-            where: { date: { gte: startUTC, lte: endUTC }, checkOutTime: { not: null } },
-        });
-        // timekeeping events = all check-ins + only those that have check-outs
-        const timekeepingCount = attCount + attsForCount;
+        const listWhere: any = { ...baseWhere };
+        if (type === 'timekeeping') {
+            listWhere.entityType = 'Attendance';
+        } else if (type === 'system') {
+            listWhere.entityType = { not: 'Attendance' };
+        }
 
-        // System count = raw AttendanceLog rows in date range
-        const systemCount = await prisma.attendanceLog.count({
-            where: { timestamp: { gte: startUTC, lte: endUTC } },
-        });
-
-        // ── 2. Fetch data entries only for the active type ─────────────────
-        let timekeepingEntries: LogEntry[] = [];
-        let systemEntries: LogEntry[] = [];
-
-        if (type === 'all' || type === 'timekeeping') {
-            const atts = await prisma.attendance.findMany({
-                where: { date: { gte: startUTC, lte: endUTC } },
+        // 2. Fetch the paginated logs and counts concurrently
+        const [total, timekeepingCount, systemCount, rawLogs] = await Promise.all([
+            prisma.auditLog.count({ where: listWhere }),
+            prisma.auditLog.count({ where: { ...baseWhere, entityType: 'Attendance' } }),
+            prisma.auditLog.count({ where: { ...baseWhere, entityType: { not: 'Attendance' } } }),
+            prisma.auditLog.findMany({
+                where: listWhere,
                 include: {
-                    employee: {
+                    performer: {
                         select: {
                             id: true,
                             firstName: true,
                             lastName: true,
-                            branch: true,
-                            department: true,          // legacy string
-                            Department: { select: { name: true } },  // FK relation
-                            Shift: { select: { name: true } },
+                            department: true,
+                            role: true,
                         }
                     }
                 },
-                orderBy: { checkInTime: 'desc' },
-            });
-
-            for (const att of atts) {
-                const emp = att.employee;
-                const empName = `${emp.firstName} ${emp.lastName}`.trim();
-                const source = emp.branch || 'Unassigned';
-                // Use FK relation name first, then legacy string, then fallback
-                const deptName = emp.Department?.name || emp.department || 'No Department';
-                const shiftName = emp.Shift?.name || 'MORNING';
-                const ciStatus = deriveStatus(att.checkInTime);
-
-                timekeepingEntries.push({
-                    id: `att-${att.id}-in`,
-                    type: 'timekeeping',
-                    timestamp: att.checkInTime.toISOString(),
-                    employeeName: empName,
-                    employeeId: emp.id,
-                    action: 'Check In',
-                    details: `${deptName} — ${ciStatus === 'late' ? 'Late arrival' : 'On time'}`,
-                    source,
-                    status: ciStatus,
-                });
-
-                if (att.checkOutTime) {
-                    timekeepingEntries.push({
-                        id: `att-${att.id}-out`,
-                        type: 'timekeeping',
-                        timestamp: att.checkOutTime.toISOString(),
-                        employeeName: empName,
-                        employeeId: emp.id,
-                        action: 'Check Out',
-                        details: `${deptName} — ${shiftName} shift`,
-                        source,
-                        status: ciStatus,
-                    });
-                }
-            }
-
-            timekeepingEntries.sort((a, b) =>
-                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-        }
-
-        if (type === 'all' || type === 'system') {
-            const rawLogs = await prisma.attendanceLog.findMany({
-                where: { timestamp: { gte: startUTC, lte: endUTC } },
-                include: {
-                    employee: {
-                        select: {
-                            id: true,
-                            firstName: true,
-                            lastName: true,
-                            branch: true,
-                            department: true,
-                            Department: { select: { name: true } },
-                        }
-                    },
-                    Device: { select: { name: true, location: true } }
-                },
                 orderBy: { timestamp: 'desc' },
-            });
+                skip: (pageNum - 1) * limitNum,
+                take: limitNum,
+            })
+        ]);
 
-            for (const log of rawLogs) {
-                const emp = log.employee;
-                const device = log.Device;
-                const deptName = emp.Department?.name || emp.department || 'No Department';
-                // AttendanceLog.status: 0 = check-in scan, 1 = check-out scan
-                const scanType = log.status === 0 ? 'Check-in scan' : log.status === 1 ? 'Check-out scan' : 'Biometric scan';
-                const deviceLabel = device?.location || device?.name || 'Unknown Device';
+        // 3. Map to the expected LogEntry format for the frontend
+        // We will update the frontend later to accept the raw AuditLog format,
+        // but to keep things working right now we map it to the old LogEntry structure.
+        const mappedLogs = rawLogs.map((log: any) => {
+            const empName = log.performer ? `${log.performer.firstName} ${log.performer.lastName}`.trim() : 'System';
+            const deptName = log.performer?.department || 'System';
 
-                systemEntries.push({
-                    id: `log-${log.id}`,
-                    type: 'system',
-                    timestamp: log.timestamp.toISOString(),
-                    employeeName: `${emp.firstName} ${emp.lastName}`.trim(),
-                    employeeId: emp.id,
-                    action: 'Device Scan',
-                    details: `${scanType} · ${deptName}`,
-                    source: deviceLabel,
-                });
-            }
-        }
-
-        // ── 3. Merge, sort, paginate ───────────────────────────────────────
-        const activeEntries = type === 'all'
-            ? [...timekeepingEntries, ...systemEntries].sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            )
-            : type === 'timekeeping' ? timekeepingEntries : systemEntries;
-
-        const activeTotal = type === 'all'
-            ? timekeepingCount + systemCount
-            : type === 'timekeeping' ? timekeepingCount : systemCount;
-
-        const paginated = activeEntries.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+            return {
+                id: log.id.toString(),
+                type: log.entityType === 'Attendance' ? 'timekeeping' : 'system',
+                timestamp: log.timestamp.toISOString(),
+                employeeName: empName,
+                employeeId: log.performedBy || 0,
+                employeeRole: log.performer?.role || 'SYSTEM',
+                action: log.action,
+                details: log.details || `${log.action} on ${log.entityType}`,
+                source: log.source,
+                level: log.level,
+                metadata: log.metadata
+            };
+        });
 
         return res.json({
             success: true,
-            data: paginated,
+            data: mappedLogs,
             meta: {
-                total: activeTotal,
+                total,
                 page: pageNum,
                 limit: limitNum,
-                totalPages: Math.ceil(activeTotal / limitNum),
+                totalPages: Math.ceil(total / limitNum),
                 counts: {
-                    timekeeping: timekeepingCount,   // always accurate
-                    system: systemCount,          // always accurate
-                },
+                    timekeeping: timekeepingCount,
+                    system: systemCount
+                }
             },
         });
 

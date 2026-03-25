@@ -64,7 +64,7 @@ export default function BiometricPage() {
 
   // Stats
   const [stats, setStats] = useState({
-    onTime: 0,
+    totalPresent: 0,
     totalLate: 0,
     totalAbsent: 0,
     total: 0,
@@ -178,8 +178,10 @@ export default function BiometricPage() {
           const shiftCode: string | null = log.shiftCode ?? emp.Shift?.shiftCode ?? null
           const isAnomaly: boolean = log.isAnomaly ?? false
           const isEarlyOut: boolean = log.isEarlyOut ?? false
-
-          const status = isEarlyOut ? 'early-out' : isAnomaly ? 'anomaly' : lateMinutes > 0 ? 'late' : undertimeMinutes > 0 ? 'undertime' : (log.status || 'present')
+          const isShiftActive: boolean = log.isShiftActive ?? false
+          const gracePeriodApplied: boolean = log.gracePeriodApplied ?? false
+          // If shift is active, enforce IN_PROGRESS status to skip penalty labeling for active shifts
+          const status = isShiftActive ? 'IN_PROGRESS' : isEarlyOut ? 'early-out' : isAnomaly ? 'anomaly' : lateMinutes > 0 ? 'late' : undertimeMinutes > 0 ? 'undertime' : (log.status || 'present')
 
           return {
             id: log.id,
@@ -200,6 +202,8 @@ export default function BiometricPage() {
             overtimeMinutes,
             undertimeMinutes,
             isAnomaly,
+            isShiftActive,
+            gracePeriodApplied,
           }
         })
 
@@ -235,6 +239,8 @@ export default function BiometricPage() {
             overtimeMinutes: 0,
             undertimeMinutes: 0,
             isAnomaly: false,
+            isShiftActive: false,
+            gracePeriodApplied: false,
           }))
 
         const full = [...mapped, ...absentRows]
@@ -245,7 +251,8 @@ export default function BiometricPage() {
         setRecords(filtered)
         setTotalPages(Math.max(1, Math.ceil(filtered.length / rowsPerPage)))
         setStats({
-          onTime: filtered.filter((r: any) => r.status === 'present').length,
+          // Count any recorded presence on site as 'present' for the high level card
+          totalPresent: filtered.filter((r: any) => ['present', 'late', 'IN_PROGRESS', 'anomaly', 'early-out'].includes(r.status)).length,
           totalLate: filtered.filter((r: any) => r.status === 'late').length,
           totalAbsent: filtered.filter((r: any) => r.status === 'absent').length,
           total: filtered.length,
@@ -283,30 +290,57 @@ export default function BiometricPage() {
     const date = new Date(selectedDate + 'T00:00:00')
     const formattedDate = `${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`
     const branchLabel = activeBranchId === 'all' ? 'All Branches' : (branches.find(b => b.id === activeBranchId)?.name || 'Branch')
-    
-    const allRows: (string | number)[][] = [
-      ['BITS Attendance Report'],
-      ['Branch', branchLabel],
-      ['Date', formattedDate],
-      ['Generated', new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })],
-      [],
-      ['SUMMARY'],
-      ['Total Employees', records.length, '', 'Avg Hours', `${stats.avgHours}h`],
-      ['On Time', records.filter(r => r.status === 'present').length, '', 'Overtime Total', `${stats.totalOvertime}h`],
-      ['Late', records.filter(r => r.status === 'late').length, '', 'Undertime Total', `${stats.totalUndertime}h`],
-      ['Absent',  records.filter(r => r.status === 'absent').length],
-      [],
-      ['#', 'Employee', 'Branch', 'Department', 'Shift', 'Check In', 'Check Out', 'Hours', 'Late', 'OT', 'UT', 'Status']
-    ]
 
+    const presentCount = records.filter(r => r.status === 'present').length
+    const lateCount = records.filter(r => r.status === 'late').length
+    const anomalyCount = records.filter((r: any) => r.isAnomaly).length
+    const absentCount = records.filter(r => r.status === 'absent').length
+    const avgHoursNum = parseFloat(stats.avgHours)
+
+    const allRows: (string | number)[][] = []
+
+    // ── Header block ──
+    allRows.push(['BITS Attendance Report'])
+    allRows.push(['Branch', branchLabel])
+    allRows.push(['Date', formattedDate])
+    allRows.push(['Generated', new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila' })])
+    allRows.push([])
+
+    // ── Summary stats ──
+    allRows.push(['SUMMARY'])
+    allRows.push(['Total Employees', records.length, '', 'Avg Hours', `${stats.avgHours}h`])
+    allRows.push(['Present', presentCount,        '', 'Overtime Total', `${stats.totalOvertime}h`])
+    allRows.push(['Late',    lateCount,           '', 'Undertime Total', `${stats.totalUndertime}h`])
+    allRows.push(['Anomaly', anomalyCount])
+    allRows.push(['Absent',  absentCount])
+    allRows.push([])
+
+    // ── Column headers ──
+    allRows.push([
+      '#', 'Employee', 'Branch', 'Department', 'Shift',
+      'Check In', 'Check Out', 'Hours Worked',
+      'Late By', 'Overtime', 'Undertime', 'Status'
+    ])
+
+    // ── Data rows ──
     records.forEach((r, i) => {
+      const statusLabel = r.isAnomaly
+        ? 'Anomaly'
+        : r.status === 'IN_PROGRESS' ? 'In Progress' 
+        : r.status.charAt(0).toUpperCase() + r.status.slice(1)
       allRows.push([
-        i + 1, r.employeeName, r.branchName, r.department, r.shiftCode || '—',
-        r.checkIn, r.checkOut, r.totalHours > 0 ? fmtHours(r.totalHours) : '—',
+        i + 1,
+        r.employeeName,
+        r.branchName,
+        r.department,
+        r.shiftCode || 'No Shift',
+        r.checkIn,
+        r.isShiftActive ? 'ACTIVE' : r.checkOut,
+        r.isShiftActive ? 'LIVE' : (r.totalHours > 0 ? fmtHours(r.totalHours) : '—'),
         formatLate(r.lateMinutes),
         r.overtimeMinutes > 0 ? `+${fmtMins(r.overtimeMinutes)}` : '—',
         r.undertimeMinutes > 0 ? `-${fmtMins(r.undertimeMinutes)}` : '—',
-        r.status
+        statusLabel
       ])
     })
 
@@ -388,7 +422,10 @@ export default function BiometricPage() {
             <h3 className="text-sm font-black text-foreground uppercase tracking-widest">Attendance Logs</h3>
           </div>
           <div className="flex items-center gap-4">
-            <div className="text-center"><p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">On Time</p><p className="text-xl font-black text-foreground">{stats.onTime}</p></div>
+            <div className="text-center">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Present</p>
+              <p className="text-xl font-black text-emerald-500">{stats.totalPresent}</p>
+            </div>
             <div className="w-px h-8 bg-border" />
             <div className="text-center"><p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Late</p><p className="text-xl font-black text-yellow-500">{stats.totalLate}</p></div>
             <div className="w-px h-8 bg-border" />
@@ -500,20 +537,51 @@ export default function BiometricPage() {
                         <span className="text-[10px] text-muted-foreground italic font-medium">No Shift</span>
                       )}
                     </td>
-                    <td className={`px-4 py-4 text-sm font-mono font-bold ${
-                      record.status === 'late' ? 'text-yellow-500' :
-                      record.status === 'present' ? 'text-emerald-500' :
-                      'text-muted-foreground'
-                    }`}>{record.checkIn}</td>
-                    <td className="px-4 py-4 text-sm font-mono text-muted-foreground font-bold">{record.checkOut}</td>
+                    <td className="px-4 py-4 text-sm font-mono font-bold">
+                      <div className="flex flex-col">
+                        <span className={`${
+                          record.status === 'late' ? 'text-yellow-500' :
+                          record.status === 'present' ? 'text-emerald-500' :
+                          'text-muted-foreground'
+                        }`}>{record.checkIn}</span>
+                        {record.gracePeriodApplied && (
+                          <span className="text-[9px] text-slate-400 mt-0.5" title="Check-in was late but within allowed grace period">
+                            Grace Period
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 text-sm font-mono text-muted-foreground font-bold">
+                      {record.isShiftActive ? (
+                        <span className="inline-flex items-center gap-2 text-blue-500 font-bold text-[10px] uppercase tracking-wider">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                          </span>
+                          Active
+                        </span>
+                      ) : (
+                        record.checkOut
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-center">
-                      {record.lateMinutes > 0 ? (
+                      {record.lateMinutes && record.lateMinutes > 0 ? (
                         <span className="text-[10px] font-black text-yellow-600 bg-yellow-500/10 border border-yellow-500/20 px-2.5 py-1 rounded-full whitespace-nowrap">
                           {formatLate(record.lateMinutes)}
                         </span>
+                      ) : record.gracePeriodApplied ? (
+                        <span className="text-[10px] text-muted-foreground font-bold whitespace-nowrap">
+                          0m (Grace)
+                        </span>
                       ) : <span className="text-[10px] text-muted-foreground/30 font-black">—</span>}
                     </td>
-                    <td className="px-4 py-4 text-sm font-mono text-foreground font-bold text-center">{fmtHours(record.totalHours)}</td>
+                    <td className="px-4 py-4 text-sm font-mono text-foreground font-bold text-center">
+                      {record.isShiftActive ? (
+                        <span className="text-muted-foreground text-xs italic">Live</span>
+                      ) : (
+                        fmtHours(record.totalHours)
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-center">
                       <span className={`text-sm font-bold ${record.overtimeMinutes > 0 ? 'text-emerald-500' : 'text-muted-foreground/30'}`}>
                         {record.overtimeMinutes > 0 ? `+${fmtMins(record.overtimeMinutes)}` : '—'}
@@ -525,9 +593,31 @@ export default function BiometricPage() {
                       </span>
                     </td>
                     <td className="px-4 py-4 text-center">
-                      <span className={`font-black text-[10px] uppercase px-3 py-1 rounded-full border whitespace-nowrap ${record.status === 'present' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : record.status === 'late' ? 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20' : 'text-red-500 bg-red-500/10 border-red-500/20'}`}>
-                        {record.status === 'present' ? 'On Time' : record.status}
-                      </span>
+                      {record.isAnomaly ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-700 border border-orange-200 whitespace-nowrap">
+                          <AlertCircle className="w-3 h-3" />
+                          Anomaly
+                        </span>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className={
+                            record.status === 'present'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                              : record.status === 'IN_PROGRESS'
+                                ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                                : record.status === 'late'
+                                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                  : record.status === 'undertime'
+                                    ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                                    : record.status === 'absent'
+                                      ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                                      : 'bg-secondary/50 text-muted-foreground border-border'
+                          }
+                        >
+                          {record.status === 'IN_PROGRESS' ? 'In Progress' : record.status.charAt(0).toUpperCase() + record.status.slice(1)}
+                        </Badge>
+                      )}
                     </td>
                   </tr>
                 ))}
