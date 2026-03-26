@@ -27,6 +27,11 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Trust first proxy (Nginx / Docker / cloud LB) so req.ip reflects the real
+// client IP from X-Forwarded-For instead of the proxy's internal address.
+// Increase this number if there are multiple proxy layers (e.g. Cloudflare → Nginx → Express).
+app.set('trust proxy', 1);
+
 // ── CORS config ───────────────────────────────────────────────────────────────
 // FRONTEND_URL:
 //   LOCAL  → set in backend/.env  (e.g. http://localhost:3010)

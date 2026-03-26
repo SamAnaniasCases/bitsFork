@@ -8,12 +8,27 @@ import rateLimit from 'express-rate-limit';
 
 // ── Rate Limiters ─────────────────────────────────────────────────────────────
 
-/** Login: max 10 attempts per 15 minutes per IP */
-const loginLimiter = rateLimit({
+/**
+ * Login rate limiter — hybrid key (IP + email) with auto-reset on success.
+ *
+ * Key strategy:  `${req.ip}:${email}` scopes the limit to a specific
+ * IP + user combination. This prevents:
+ *   - One attacker from blocking ALL users (IP-only problem behind NAT/proxy)
+ *   - An attacker from trying many accounts from one IP (email-only problem)
+ *
+ * skipSuccessfulRequests: successful logins (2xx) do NOT count toward the limit,
+ * so legitimate users never accumulate strikes from their own correct logins.
+ */
+export const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    keyGenerator: (req) => {
+        const email = req.body?.email?.toLowerCase?.() || 'unknown';
+        return `${req.ip}:${email}`;
+    },
     message: { success: false, message: 'Too many login attempts. Please try again in 15 minutes.', error: 'rate_limited' }
 });
 

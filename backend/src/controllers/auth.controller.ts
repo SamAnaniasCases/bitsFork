@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/token.utils';
 import { audit } from '../lib/auditLogger';
+import { loginLimiter } from '../routes/auth_routes';
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -179,6 +180,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
                 needsPasswordChange: employee.needsPasswordChange
             }
         });
+
+        // Reset the rate limit counter for this IP+user on successful login
+        // so accumulated failed attempts don't carry over.
+        const rateLimitKey = `${req.ip}:${email.toLowerCase()}`;
+        loginLimiter.resetKey(rateLimitKey);
 
         await audit({
             action: 'LOGIN',
