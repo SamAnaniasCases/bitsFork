@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, Suspense, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Edit2, UserPlus, Search, Download, ChevronLeft, ChevronRight, Loader2, X, Fingerprint, CheckCircle2, WifiOff, Timer, AlertCircle } from 'lucide-react';
+import { Edit2, UserPlus, Search, Download, ChevronLeft, ChevronRight, Loader2, X, Fingerprint, CheckCircle2, WifiOff, Timer, AlertCircle, Key } from 'lucide-react';
 import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import * as XLSX from 'xlsx';

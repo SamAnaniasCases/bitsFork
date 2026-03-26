@@ -117,15 +117,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-        // Role-based access control: Only ADMIN and HR can access the web app
-        if (employee.role !== 'ADMIN' && employee.role !== 'HR') {
-            res.status(403).json({
-                success: false,
-                message: 'Access denied. Only administrators and HR personnel can access this system.'
-            });
-            return;
-        }
-
         const tokenPayload = {
             employeeId: employee.id,
             role: employee.role,
