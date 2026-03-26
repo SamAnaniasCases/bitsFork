@@ -48,6 +48,13 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       # FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
 
+      # SMTP Configuration (for sending employee credentials via email)
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+
+
       TZ: Asia/Manila
       # volumes:
       # - ./backend:/app
@@ -74,10 +81,10 @@ services:
       BACKEND_URL: ${BACKEND_URL:-http://backend:3001}
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+    # volumes:
+    #   - ./frontend:/app
+    #   - /app/node_modules
+    #   - /app/.next
     command: npm run dev -- --webpack
     ports:
       - "3013:3000"
