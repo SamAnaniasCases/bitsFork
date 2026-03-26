@@ -14,6 +14,8 @@ import { departmentsApi, branchesApi } from '@/lib/api'
 import type { Department, Branch } from '@/lib/api'
 import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll'
 import { validateEmployeeId } from '@/lib/employeeValidation'
+import { useTableSort } from '@/hooks/useTableSort'
+import { SortableHeader } from '@/components/ui/SortableHeader'
 
 type Employee = {
   id: number
@@ -281,8 +283,12 @@ export default function EmployeesPage() {
     return matchesSearch && matchesDept && matchesBranch
   })
 
-  const totalPages = Math.ceil(filteredEmployees.length / rowsPerPage)
-  const paginatedEmployees = filteredEmployees.slice(
+  const { sortedData: paginatedSource, sortKey, sortOrder, handleSort } = useTableSort<Employee>({
+    initialData: filteredEmployees
+  })
+
+  const totalPages = Math.ceil(paginatedSource.length / rowsPerPage)
+  const paginatedEmployees = paginatedSource.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   )
@@ -878,15 +884,15 @@ export default function EmployeesPage() {
           <table className="w-full text-left text-sm min-w-[900px]">
             <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
               <tr>
-                <th className="px-4 py-4 w-20">ZK ID</th>
-                <th className="px-6 py-4">Employee</th>
-                <th className="px-4 py-4">Employee ID</th>
+                <SortableHeader label="ZK ID" sortKey="zkId" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-4 py-4 w-20" />
+                <SortableHeader label="Employee" sortKey="firstName" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
+                <SortableHeader label="Employee ID" sortKey="employeeNumber" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-4 py-4" />
                 <th className="px-4 py-4">Enrolled On</th>
-                <th className="px-6 py-4">Department</th>
+                <SortableHeader label="Department" sortKey="department" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
                 <th className="px-6 py-4">Shift</th>
-                <th className="px-6 py-4">Branch</th>
-                <th className="px-6 py-4">Contact</th>
-                <th className="px-6 py-4">Joined</th>
+                <SortableHeader label="Branch" sortKey="branch" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
+                <SortableHeader label="Contact" sortKey="contactNumber" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
+                <SortableHeader label="Joined" sortKey="hireDate" currentSortKey={sortKey} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
                 <th className="px-6 py-4">Actions</th>
               </tr>
             </thead>

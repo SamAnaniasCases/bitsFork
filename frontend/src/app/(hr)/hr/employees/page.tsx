@@ -7,6 +7,8 @@ import { useHorizontalDragScroll } from '@/hooks/useHorizontalDragScroll';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import * as XLSX from 'xlsx';
 import { validateEmployeeId } from '@/lib/employeeValidation';
+import { useTableSort } from '@/hooks/useTableSort';
+import { SortableHeader } from '@/components/ui/SortableHeader';
 
 type Toast = {
   id: number;
@@ -243,11 +245,16 @@ function EmployeeDirectoryContent() {
         const matchesBranch = branchFilter === "All Branches" || emp.branch === branchFilter;
         return matchesSearch && matchesStatus && matchesDept && matchesBranch;
       })
-      .sort((a, b) => (a.zkId ?? Infinity) - (b.zkId ?? Infinity));
   }, [employees, searchQuery, statusFilter, deptFilter, branchFilter]);
 
-  const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
-  const paginatedEmployees = filteredEmployees.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const { sortedData: sortedEmployees, sortKey, sortOrder, handleSort } = useTableSort<Employee>({
+    initialData: filteredEmployees
+  });
+
+  const sortKeyStr = sortKey as string | null;
+
+  const totalPages = Math.ceil(sortedEmployees.length / itemsPerPage);
+  const paginatedEmployees = sortedEmployees.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -443,14 +450,14 @@ function EmployeeDirectoryContent() {
           <table className="w-full text-left text-sm min-w-[900px]">
             <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
               <tr>
-                <th className="px-4 py-4 w-20">ZK ID</th>
-                <th className="px-6 py-4">Employee</th>
-                <th className="px-4 py-4">Employee ID</th>
+                <SortableHeader label="ZK ID" sortKey="zkId" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-4 py-4 w-20" />
+                <SortableHeader label="Employee" sortKey="firstName" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
+                <SortableHeader label="Employee ID" sortKey="employeeNumber" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-4 py-4" />
                 <th className="px-4 py-4">Enrolled On</th>
-                <th className="px-6 py-4">Department</th>
+                <SortableHeader label="Department" sortKey="dept" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
                 <th className="px-6 py-4">Shift</th>
-                <th className="px-6 py-4">Branch</th>
-                <th className="px-6 py-4">Contact</th>
+                <SortableHeader label="Branch" sortKey="branch" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
+                <SortableHeader label="Contact" sortKey="phone" currentSortKey={sortKeyStr} currentSortOrder={sortOrder} onSort={handleSort} className="px-6 py-4" />
                 <th className="px-6 py-4">Actions</th>
               </tr>
             </thead>
