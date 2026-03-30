@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { ZKDriver } from '../lib/zk-driver';
 import { processAttendanceLogs } from './attendance.service';
 import deviceEmitter from '../lib/deviceEmitter';
+import { audit } from '../lib/auditLogger';
 
 interface SyncResult {
     success: boolean;
@@ -9,6 +10,16 @@ interface SyncResult {
     error?: string;
     newLogs?: number;
     count?: number;
+}
+
+export interface SyncZkDataResult {
+    success: boolean;
+    status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'NO_DEVICES';
+    message: string;
+    totalDevices: number;
+    successfulDevices: number;
+    failedDevices: Array<{ id: number; name: string; error: string }>;
+    newLogs: number;
 }
 
 // UIDs on the device that must NEVER be overwritten by employee sync/add.
@@ -635,10 +646,33 @@ async function syncSingleDevice(dbDevice: {
         if (latestInsertedTimestamp !== null) {
             await prisma.device.update({
                 where: { id: dbDevice.id },
-                data: { lastSyncedAt: latestInsertedTimestamp },
+                data: { lastSyncedAt: latestInsertedTimestamp, lastSyncStatus: 'SUCCESS', lastSyncError: null, lastPolledAt: new Date() },
             });
             console.log(`[ZK] "${dbDevice.name}" watermark advanced to ${latestInsertedTimestamp.toISOString()}`);
+        } else {
+            await prisma.device.update({
+                where: { id: dbDevice.id },
+                data: { lastSyncStatus: 'SUCCESS', lastSyncError: null, lastPolledAt: new Date() }
+            }).catch(() => { /* ignore */ });
         }
+
+        deviceEmitter.emit('device-sync-result', {
+            id: dbDevice.id,
+            lastSyncStatus: 'SUCCESS',
+            lastSyncedAt: latestInsertedTimestamp || watermark,
+            lastSyncError: null,
+            lastPolledAt: new Date()
+        });
+
+        await audit({
+            action: 'DEVICE_SYNC',
+            entityType: 'Device',
+            entityId: dbDevice.id,
+            source: 'cron',
+            level: 'INFO',
+            details: `Synced ${newCount} new logs from ${dbDevice.name}`,
+            metadata: { deviceId: dbDevice.id, deviceName: dbDevice.name, newLogs: newCount }
+        });
 
         console.log(`[ZK] Device "${dbDevice.name}" sync complete. ${newCount} new logs.`);
         return { deviceId: dbDevice.id, newLogs: newCount, skipped: false };
@@ -653,8 +687,32 @@ async function syncSingleDevice(dbDevice: {
         // Mark this specific device as OFFLINE
         await prisma.device.update({
             where: { id: dbDevice.id },
-            data: { isActive: false, updatedAt: new Date() }
+            data: { 
+                isActive: false, 
+                updatedAt: new Date(),
+                lastSyncStatus: 'FAILED',
+                lastSyncError: zkErrMsg(deviceErr),
+                lastPolledAt: new Date()
+            }
         }).catch(() => { /* ignore */ });
+
+        deviceEmitter.emit('device-sync-result', {
+            id: dbDevice.id,
+            lastSyncStatus: 'FAILED',
+            lastSyncedAt: watermark,
+            lastSyncError: zkErrMsg(deviceErr),
+            lastPolledAt: new Date()
+        });
+
+        await audit({
+            action: 'DEVICE_SYNC',
+            entityType: 'Device',
+            entityId: dbDevice.id,
+            source: 'cron',
+            level: 'ERROR',
+            details: `Sync failed for ${dbDevice.name}: ${zkErrMsg(deviceErr)}`,
+            metadata: { deviceId: dbDevice.id, deviceName: dbDevice.name, error: zkErrMsg(deviceErr) }
+        });
 
         if (transitionedToOffline) {
             deviceEmitter.emit('status-change', {
@@ -672,14 +730,22 @@ async function syncSingleDevice(dbDevice: {
     }
 }
 
-export const syncZkData = async (): Promise<SyncResult> => {
+export const syncZkData = async (): Promise<SyncZkDataResult> => {
     try {
         // Load ALL devices from the DB — this way IP changes via Configure take effect immediately
         const dbDevices = await prisma.device.findMany({ orderBy: { id: 'asc' } });
 
         if (dbDevices.length === 0) {
             console.warn('[ZK] No devices found in DB — skipping sync.');
-            return { success: true, message: 'No devices configured', newLogs: 0 };
+            return { 
+                success: true, 
+                status: 'NO_DEVICES', 
+                message: 'No devices configured', 
+                totalDevices: 0, 
+                successfulDevices: 0, 
+                failedDevices: [], 
+                newLogs: 0 
+            };
         }
 
         // Run all device syncs in PARALLEL — each device manages its own lock
@@ -688,15 +754,24 @@ export const syncZkData = async (): Promise<SyncResult> => {
         );
 
         let totalNewLogs = 0;
-        for (const result of results) {
+        let successfulDevices = 0;
+        const failedDevices: Array<{ id: number; name: string; error: string }> = [];
+
+        results.forEach((result, index) => {
+            const dbDevice = dbDevices[index];
             if (result.status === 'fulfilled') {
-                totalNewLogs += result.value.newLogs;
+                const deviceResult = result.value;
+                totalNewLogs += deviceResult.newLogs;
+                if (deviceResult.error) {
+                    failedDevices.push({ id: dbDevice.id, name: dbDevice.name, error: deviceResult.error });
+                } else {
+                    successfulDevices++;
+                }
             } else {
-                // Promise.allSettled() should not reject because syncSingleDevice
-                // catches its own errors, but log just in case
+                failedDevices.push({ id: dbDevice.id, name: dbDevice.name, error: String(result.reason) });
                 console.error('[ZK] Unexpected rejection in syncSingleDevice:', result.reason);
             }
-        }
+        });
 
         // Process all new logs into Attendance records once, after all devices are done
         if (totalNewLogs > 0) {
@@ -704,11 +779,35 @@ export const syncZkData = async (): Promise<SyncResult> => {
             await processAttendanceLogs();
         }
 
-        return { success: true, newLogs: totalNewLogs };
+        const activeDevicesCount = dbDevices.filter(d => d.syncEnabled).length;
+        
+        let status: 'SUCCESS' | 'PARTIAL' | 'FAILED' = 'SUCCESS';
+        if (failedDevices.length > 0) {
+            status = successfulDevices > 0 ? 'PARTIAL' : 'FAILED';
+        }
+
+        return { 
+            success: status !== 'FAILED',
+            status, 
+            message: `Synced ${successfulDevices}/${activeDevicesCount} active devices.`,
+            totalDevices: activeDevicesCount,
+            successfulDevices,
+            failedDevices,
+            newLogs: totalNewLogs
+        };
 
     } catch (error: any) {
         console.error('[ZK] syncZkData fatal error:', zkErrMsg(error));
-        return { success: false, error: `Sync Error: ${zkErrMsg(error)}`, message: 'Failed to sync attendance data' };
+        return { 
+            success: false, 
+            status: 'FAILED',
+            error: `Sync Error: ${zkErrMsg(error)}`, 
+            message: 'Failed to sync attendance data',
+            totalDevices: 0,
+            successfulDevices: 0,
+            failedDevices: [],
+            newLogs: 0
+        } as any;
     }
     // NOTE: No top-level releaseDeviceLock() here — each device releases its own lock
 };
